@@ -53,6 +53,26 @@ button {
 button.secondary { background: #e5e5ea; color: #111; }
 .btn-row { display: flex; gap: 8px; }
 .btn-row button { flex: 1; }
+.kf-list { display: flex; flex-direction: column; gap: 6px; }
+.kf-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+.kf-row input { width: 100%; padding: 4px 6px; font-size: 12px; }
+.kf-sep { font-size: 11px; color: #888; }
+.kf-delete {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid #e5e5ea;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.kf-delete:hover { background: #fef2f2; border-color: #fecaca; }
 #stage {
   background: #fff;
   border-radius: 12px;
@@ -72,6 +92,30 @@ svg.preview, canvas#three {
   position: absolute; top: 0; left: 0;
   display: block;
 }
+/* Pointer events go to the SVG in 2D mode so the camera handlers fire.
+   In 3D mode the THREE canvas is shown above and OrbitControls handles
+   its own interactions. */
+body:not(.mode3d-on) svg.preview {
+  touch-action: none;
+  cursor: grab;
+}
+body:not(.mode3d-on) svg.preview:active { cursor: grabbing; }
+.reset-view {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 6;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e5ea;
+  background: rgba(255,255,255,0.92);
+  color: #111;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.reset-view:hover { background: #fff; }
+body.mode3d-on .reset-view { display: none; }
 canvas#three { background: linear-gradient(180deg,#eef1f6,#cfd6e2); }
 body.mode3d-on canvas#three { display: block; }
 body.mode3d-on svg.preview     { display: none; }
@@ -196,9 +240,7 @@ button[disabled], .material-chip[disabled], .hdr-chip[disabled] {
   width: 100%;
   max-width: 1100px;
 }
-body:not(.mode3d-on) .capture-bar { opacity: 0.45; pointer-events: none; }
 .capture-hint { display: none; font-size: 11px; color: #888; }
-body:not(.mode3d-on) .capture-hint { display: block; }
 .cycle-pill {
   display: flex;
   gap: 4px;

@@ -23,6 +23,16 @@ import {
 } from './rendering.mjs';
 import { svgTextToPolys } from './svg-paths.mjs';
 import {
+  IDENTITY_VIEW_2D,
+  applyView2D,
+  interpolateKeyframes,
+  keyframeDuration,
+  renderToCanvas,
+  rotateViewBetween,
+  unionViewBox,
+  zoomViewAt,
+} from './render2d.mjs';
+import {
   ASPECT_OPTIONS,
   RESOLUTION_OPTIONS,
   VIDEO_FORMATS,
@@ -341,7 +351,15 @@ export default function Page() {
 
     function startVideoRecording() {
       if (recorderHandle) return;
-      if (!$('mode3d').checked || !currentMesh) {
+      if (!$('mode3d').checked) {
+        if (!lastGeom || !lastGeom.d) {
+          status('Type some text first to record a video.');
+          return;
+        }
+        startVideoRecording2D();
+        return;
+      }
+      if (!currentMesh) {
         status('Switch on 3D mode first to record a video.');
         return;
       }
@@ -386,13 +404,20 @@ export default function Page() {
     }
 
     function stopVideoRecording() {
+      precomputeAborted = true;
       if (recorderAutoStop) { clearTimeout(recorderAutoStop); recorderAutoStop = 0; }
       if (recorderInterval) { clearInterval(recorderInterval); recorderInterval = 0; }
+      if (recordPlaybackTimer) { clearTimeout(recordPlaybackTimer); recordPlaybackTimer = 0; }
       if (recorderHandle) recorderHandle.stop();
       recorderHandle = null;
       recordingActive = false;
       $('captureBar').classList.remove('recording');
       $('recIndicator').classList.remove('open');
+      // Release the frozen viewBox so 2D editing returns to live framing.
+      if (frozenViewBox2D) {
+        frozenViewBox2D = null;
+        if (lastParams && lastGeom) applyToDOM(lastParams, lastGeom);
+      }
       // Restore the on-screen background to whatever the HDR/env state asks for.
       const entry = envCache.get(currentHdrId);
       if (entry) applyEnvironment(entry); else { scene.background = null; needsRender = true; }
@@ -549,12 +574,31 @@ export default function Page() {
        ============================================================ */
     let dragging = false;
     let lastRings = null;
+    let lastGeom = null;
+    let lastParams = null;
     let rafScheduled = false;
     // When an SVG file is uploaded we cache its rings here. While set, the
     // text/font path is bypassed and these polys feed the existing
     // inflate → raster → marching-squares → 3D pipeline as a single "glyph".
     let svgPolys = null;
     let svgFileName = '';
+
+    // 2D camera state mirrors OrbitControls in spirit: drag to pan, wheel to
+    // zoom on cursor, shift+drag to rotate around the viewBox center. The
+    // same matrix is applied to the SVG #viewGroup and to the recording
+    // canvas so a recorded clip reflects whatever framing the user picked.
+    let view2D = { ...IDENTITY_VIEW_2D };
+
+    // User-authored animation keyframes for the inflate parameter.
+    // Sorted by time on every mutation. Empty list = no animation.
+    let keyframes = [];
+
+    // While recording the viewBox is frozen to the union of all pre-rendered
+    // frames so that bbox jitter (caused by `merge` blending different
+    // numbers of bubbles per frame) doesn't shake the camera.
+    let frozenViewBox2D = null;
+    let recordPlaybackTimer = 0;
+    let precomputeAborted = false;
 
     function readParams() {
       return {
@@ -644,9 +688,18 @@ export default function Page() {
 
     function applyToDOM(p, geom) {
       const svg = $('preview');
-      const [minX, minY, maxX, maxY] = geom.bbox;
+      lastGeom = geom;
+      lastParams = p;
       const pad = 40;
-      svg.setAttribute('viewBox', `${minX - pad} ${minY - pad} ${(maxX - minX) + pad*2} ${(maxY - minY) + pad*2}`);
+      let viewBoxAttr;
+      if (frozenViewBox2D) {
+        const [fminX, fminY, fW, fH] = frozenViewBox2D;
+        viewBoxAttr = `${fminX} ${fminY} ${fW} ${fH}`;
+      } else {
+        const [minX, minY, maxX, maxY] = geom.bbox;
+        viewBoxAttr = `${minX - pad} ${minY - pad} ${(maxX - minX) + pad*2} ${(maxY - minY) + pad*2}`;
+      }
+      svg.setAttribute('viewBox', viewBoxAttr);
 
       const main = $('mainPath');
       main.setAttribute('d', geom.d);
@@ -686,6 +739,133 @@ export default function Page() {
       } else {
         ol.style.display = 'none';
       }
+
+      applyView2D($('viewGroup'), view2D, currentViewBoxArray());
+    }
+
+    // Read the current SVG viewBox as `[minX, minY, w, h]`.
+    function currentViewBoxArray() {
+      const vb = $('preview').viewBox.baseVal;
+      return [vb.x, vb.y, vb.width, vb.height];
+    }
+
+    // Convert a screen pixel coordinate to the SVG's user-space coordinates,
+    // accounting for the live `getScreenCTM` (which already includes the
+    // viewGroup's transform on its parents — but we want the un-transformed
+    // user space inside the SVG, so we use the SVG element's CTM, not the
+    // group's).
+    function screenPtToSVG(svg, px, py) {
+      const pt = svg.createSVGPoint();
+      pt.x = px; pt.y = py;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return { x: px, y: py };
+      const inv = ctm.inverse();
+      const out = pt.matrixTransform(inv);
+      return { x: out.x, y: out.y };
+    }
+
+    // Update view2D and re-apply the SVG transform without recomputing
+    // geometry. Cheap enough to call on every pointermove/wheel.
+    function setView2D(next) {
+      view2D = next;
+      const vg = $('viewGroup');
+      if (vg) applyView2D(vg, view2D, currentViewBoxArray());
+    }
+
+    function resetView2D() {
+      setView2D({ ...IDENTITY_VIEW_2D });
+    }
+
+    // 2D camera mouse/wheel/keyboard handlers, attached to #preview. Mirrors
+    // the OrbitControls feel from 3D mode: drag to pan, wheel to zoom on
+    // cursor, shift+drag (or right-button drag) to rotate.
+    function setupCamera2D() {
+      const svg = $('preview');
+      if (!svg) return;
+
+      let panActive = false;
+      let rotateActive = false;
+      let pointerId = null;
+      let startScreenX = 0, startScreenY = 0;
+      let startTx = 0, startTy = 0;
+      let startRot = 0;
+      let startUserX = 0, startUserY = 0;
+
+      const onPointerDown = (e) => {
+        // Only steal events when we're in 2D mode; 3D has its own controls
+        // on the THREE canvas which sits above when 3D mode is active.
+        if ($('mode3d').checked) return;
+        if (e.button !== 0 && e.button !== 2) return;
+        const rotMode = e.shiftKey || e.button === 2;
+        const u = screenPtToSVG(svg, e.clientX, e.clientY);
+        startScreenX = e.clientX;
+        startScreenY = e.clientY;
+        startTx = view2D.tx;
+        startTy = view2D.ty;
+        startRot = view2D.rot;
+        startUserX = u.x;
+        startUserY = u.y;
+        panActive = !rotMode;
+        rotateActive = rotMode;
+        pointerId = e.pointerId;
+        try { svg.setPointerCapture(pointerId); } catch (_) {}
+        e.preventDefault();
+      };
+
+      const onPointerMove = (e) => {
+        if (!panActive && !rotateActive) return;
+        if (e.pointerId !== pointerId) return;
+        if (rotateActive) {
+          const cur = screenPtToSVG(svg, e.clientX, e.clientY);
+          const next = rotateViewBetween(
+            { ...view2D, rot: startRot },
+            currentViewBoxArray(),
+            startUserX, startUserY,
+            cur.x, cur.y,
+          );
+          setView2D({ ...view2D, rot: next.rot });
+        } else {
+          // Pan in screen pixels, mapped to viewBox units via the SVG's CTM.
+          const ctm = svg.getScreenCTM();
+          if (!ctm) return;
+          const dxScreen = e.clientX - startScreenX;
+          const dyScreen = e.clientY - startScreenY;
+          setView2D({
+            ...view2D,
+            tx: startTx + dxScreen / (ctm.a || 1),
+            ty: startTy + dyScreen / (ctm.d || 1),
+          });
+        }
+      };
+
+      const onPointerUp = (e) => {
+        if (e.pointerId !== pointerId) return;
+        panActive = false;
+        rotateActive = false;
+        try { svg.releasePointerCapture(pointerId); } catch (_) {}
+        pointerId = null;
+      };
+
+      const onWheel = (e) => {
+        if ($('mode3d').checked) return;
+        e.preventDefault();
+        const u = screenPtToSVG(svg, e.clientX, e.clientY);
+        // Negative deltaY = wheel up = zoom in.
+        const factor = Math.exp(-e.deltaY * 0.001);
+        const next = zoomViewAt(view2D, currentViewBoxArray(), u.x, u.y, factor);
+        setView2D(next);
+      };
+
+      const onContextMenu = (e) => {
+        if (!$('mode3d').checked) e.preventDefault();
+      };
+
+      addListener(svg, 'pointerdown', onPointerDown);
+      addListener(svg, 'pointermove', onPointerMove);
+      addListener(svg, 'pointerup', onPointerUp);
+      addListener(svg, 'pointercancel', onPointerUp);
+      addListener(svg, 'wheel', onWheel);
+      addListener(svg, 'contextmenu', onContextMenu);
     }
 
     function applyStyleOnly() {
@@ -769,6 +949,290 @@ export default function Page() {
         });
       };
       img.src = url;
+    }
+
+    /* ============================================================
+       KEYFRAME ANIMATION (2D mode)
+       ============================================================ */
+    function sortKeyframes() {
+      keyframes.sort((a, b) => a.time - b.time);
+    }
+
+    function updateKeyframeStats() {
+      const stats = $('keyframeStats');
+      if (!stats) return;
+      if (keyframes.length === 0) {
+        stats.textContent = 'No keyframes — record will capture a 2-second static clip.';
+      } else if (keyframes.length === 1) {
+        stats.textContent = '1 keyframe — record will capture a 2-second static clip.';
+      } else {
+        const dur = keyframeDuration(keyframes);
+        const frames = Math.ceil(dur * 30);
+        stats.textContent = `${keyframes.length} keyframes · ${dur.toFixed(2)}s · ${frames} frames @ 30fps`;
+      }
+    }
+
+    function renderKeyframeList() {
+      const list = $('keyframeList');
+      if (!list) return;
+      list.innerHTML = '';
+      for (let i = 0; i < keyframes.length; i++) {
+        const k = keyframes[i];
+        const row = document.createElement('div');
+        row.className = 'kf-row';
+        row.innerHTML = `
+          <input class="kf-time" type="number" step="0.1" min="0" value="${k.time}" aria-label="Time (seconds)" />
+          <span class="kf-sep">s</span>
+          <input class="kf-value" type="number" step="1" min="0" max="60" value="${k.inflate}" aria-label="Inflate" />
+          <button class="kf-delete" type="button" aria-label="Delete keyframe">×</button>
+        `;
+        const tIn = row.querySelector('.kf-time');
+        const vIn = row.querySelector('.kf-value');
+        const del = row.querySelector('.kf-delete');
+        tIn.addEventListener('input', () => {
+          k.time = Math.max(0, +tIn.value || 0);
+          sortKeyframes();
+          updateKeyframeStats();
+        });
+        vIn.addEventListener('input', () => {
+          k.inflate = Math.max(0, Math.min(60, +vIn.value || 0));
+          updateKeyframeStats();
+        });
+        del.addEventListener('click', () => {
+          keyframes.splice(keyframes.indexOf(k), 1);
+          renderKeyframeList();
+          updateKeyframeStats();
+        });
+        list.appendChild(row);
+      }
+    }
+
+    function addKeyframeAtCurrent() {
+      const lastTime = keyframes.length ? keyframes[keyframes.length - 1].time : -1;
+      const time = lastTime < 0 ? 0 : Math.round((lastTime + 1) * 100) / 100;
+      keyframes.push({ time, inflate: +$('inflate').value });
+      sortKeyframes();
+      renderKeyframeList();
+      updateKeyframeStats();
+    }
+
+    function clearKeyframes() {
+      keyframes = [];
+      renderKeyframeList();
+      updateKeyframeStats();
+    }
+
+    let timelinePlayActive = false;
+    let timelinePlayTimer = 0;
+    function previewTimeline() {
+      if (timelinePlayActive) return;
+      if (keyframes.length < 2) {
+        status('Add at least two keyframes to preview the timeline.');
+        return;
+      }
+      const original = +$('inflate').value;
+      const dur = keyframeDuration(keyframes);
+      const frameMs = 1000 / 30;
+      const startedAt = performance.now();
+      timelinePlayActive = true;
+      $('kfPlay').textContent = '■ Stop preview';
+      const tick = () => {
+        if (!timelinePlayActive) return;
+        const t = (performance.now() - startedAt) / 1000;
+        if (t >= dur) {
+          stopTimelinePreview(original);
+          return;
+        }
+        const v = interpolateKeyframes(keyframes, t, original);
+        $('inflate').value = v;
+        const out = $('inflateVal');
+        if (out) out.textContent = v.toFixed(0);
+        render();
+        timelinePlayTimer = setTimeout(tick, frameMs);
+      };
+      tick();
+    }
+
+    function stopTimelinePreview(restoreValue) {
+      timelinePlayActive = false;
+      if (timelinePlayTimer) { clearTimeout(timelinePlayTimer); timelinePlayTimer = 0; }
+      const btn = $('kfPlay');
+      if (btn) btn.textContent = '▶ Preview';
+      if (restoreValue !== undefined) {
+        $('inflate').value = restoreValue;
+        const out = $('inflateVal');
+        if (out) out.textContent = (+restoreValue).toFixed(0);
+        render();
+      }
+    }
+
+    /* ============================================================
+       2D VIDEO RECORDING (keyframe-driven, pre-rendered)
+       ============================================================ */
+    // Promise wrapper around the worker job so we can `await` per-frame
+    // geometry during the pre-compute pass. Forces high-quality settings
+    // regardless of `liveDrag`.
+    function submitJobAsync(paramOverride) {
+      return new Promise((resolve, reject) => {
+        const p = readParams();
+        if (paramOverride) Object.assign(p, paramOverride);
+        let glyphPolys;
+        let cursorOffsets;
+        if (svgPolys) {
+          glyphPolys = [svgPolys];
+          cursorOffsets = [0];
+        } else {
+          glyphPolys = [];
+          cursorOffsets = [];
+          let cursorX = 0;
+          for (const ch of p.text) {
+            if (ch === ' ') { cursorX += 80 + p.spacing; continue; }
+            const entry = flattenChar(ch);
+            if (!entry) continue;
+            glyphPolys.push(entry.polys);
+            cursorOffsets.push(cursorX);
+            cursorX += entry.advance + p.spacing;
+          }
+        }
+        if (glyphPolys.length === 0) {
+          resolve({ d: '', bbox: [0, 0, 1, 1], rings: [], params: p });
+          return;
+        }
+        const msg = {
+          glyphPolys, cursorOffsets,
+          inflate: p.inflate,
+          arcQuality: 8,
+          gridRes: p.quality,
+          blurPx: p.merge ? p.blur : 0,
+          mergeAll: p.merge,
+          decimateEps: 0.4,
+        };
+        sendJob(msg, [], (res) => {
+          if (res.error) reject(new Error(res.error));
+          else resolve({ ...res, params: p });
+        });
+      });
+    }
+
+    async function preRender2DFrames() {
+      const haveKeyframes = keyframes.length >= 2;
+      const baseInflate = +$('inflate').value;
+      let duration;
+      if (haveKeyframes) {
+        duration = keyframeDuration(keyframes) * (captureCycles || 1);
+      } else {
+        duration = 2; // static clip fallback
+      }
+      const fps = 30;
+      const frameCount = Math.max(1, Math.ceil(duration * fps));
+      const frames = [];
+      precomputeAborted = false;
+
+      const indicator = $('recElapsed');
+      const initialIndicator = indicator ? indicator.textContent : '';
+      for (let i = 0; i < frameCount; i++) {
+        if (precomputeAborted) return null;
+        const t = i / fps;
+        const inflate = haveKeyframes ? interpolateKeyframes(keyframes, t, baseInflate) : baseInflate;
+        // eslint-disable-next-line no-await-in-loop
+        const res = await submitJobAsync({ inflate });
+        frames.push({ d: res.d, bbox: res.bbox, params: res.params });
+        if (indicator) indicator.textContent = `Rendering ${i + 1}/${frameCount}`;
+      }
+      if (indicator) indicator.textContent = initialIndicator;
+      return { frames, fps, duration };
+    }
+
+    async function startVideoRecording2D() {
+      if (recorderHandle) return;
+      const recordCanvas = $('record2d');
+      if (!recordCanvas) {
+        status('Recording canvas missing.');
+        return;
+      }
+
+      $('captureBar').classList.add('recording');
+      $('recIndicator').classList.add('open');
+      recordingActive = true;
+
+      let result;
+      try {
+        result = await preRender2DFrames();
+      } catch (err) {
+        status('Render failed: ' + err.message);
+        recordingActive = false;
+        $('captureBar').classList.remove('recording');
+        $('recIndicator').classList.remove('open');
+        return;
+      }
+      if (!result || precomputeAborted) {
+        recordingActive = false;
+        $('captureBar').classList.remove('recording');
+        $('recIndicator').classList.remove('open');
+        return;
+      }
+
+      const { frames, fps } = result;
+      // Convert each frame's [minX,minY,maxX,maxY] to the same form the SVG
+      // viewBox uses — but the union helper expects [minX,minY,maxX,maxY] so
+      // we pass straight in.
+      const frozenViewBox = unionViewBox(frames.map((f) => f.bbox), 40);
+      frozenViewBox2D = frozenViewBox;
+
+      // Size the record canvas to match the chosen export resolution while
+      // preserving the frozen viewBox aspect ratio.
+      const targetW = captureVideoResolution || 1920;
+      const aspect = frozenViewBox[2] / frozenViewBox[3] || 1;
+      recordCanvas.width = Math.max(2, Math.round(targetW));
+      recordCanvas.height = Math.max(2, Math.round(targetW / aspect));
+
+      // Background color (mirrors the photo path's WYSIWYG behaviour).
+      const bgColor = captureWithBackground
+        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#1f2228' : '#eef1f6')
+        : null;
+
+      // Paint the first frame so MediaRecorder's first sample isn't blank.
+      renderToCanvas(recordCanvas, frames[0], frames[0].params, view2D, frozenViewBox, { background: bgColor });
+
+      recorderHandle = createVideoRecorder(recordCanvas, { quality: captureVideoQuality, fps });
+      let frameIndex = 0;
+      const frameMs = 1000 / fps;
+      let lastFrameAt = performance.now();
+      const paint = () => {
+        if (!recorderHandle) return;
+        const f = frames[frameIndex];
+        renderToCanvas(recordCanvas, f, f.params, view2D, frozenViewBox, { background: bgColor });
+        frameIndex++;
+        if (frameIndex >= frames.length) {
+          // Allow the last frame a full slot before stopping so the recorder
+          // captures it. Mirror the elapsed timer one final time.
+          recordPlaybackTimer = setTimeout(() => stopVideoRecording(), frameMs);
+          return;
+        }
+        const now = performance.now();
+        const drift = now - lastFrameAt - frameMs;
+        lastFrameAt = now;
+        recordPlaybackTimer = setTimeout(paint, Math.max(0, frameMs - drift));
+      };
+      lastFrameAt = performance.now();
+      recordPlaybackTimer = setTimeout(paint, frameMs);
+
+      recorderInterval = setInterval(() => {
+        if (!recorderHandle) return;
+        const elapsed = recorderHandle.elapsedSeconds();
+        $('recElapsed').textContent = formatElapsed(elapsed);
+      }, 100);
+
+      recorderHandle.stopped.then(({ blob, duration }) => {
+        lastVideoBlob = blob;
+        lastVideoDuration = duration;
+        if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
+        lastVideoUrl = URL.createObjectURL(blob);
+        const v = $('videoPreview');
+        v.src = lastVideoUrl;
+        v.play().catch(() => {});
+        $('videoModal').classList.add('open');
+      });
     }
 
     /* ============================================================
@@ -863,6 +1327,7 @@ export default function Page() {
     }
     updateHdrButtons();
     applyControlAvailability();
+    setupCamera2D();
 
     addListener($('showEnv'), 'change', () => {
       showEnvironment = $('showEnv').checked;
@@ -952,6 +1417,17 @@ export default function Page() {
     });
     addListener($('dlSvg'), 'click', downloadSvg);
     addListener($('dlPng'), 'click', downloadPng);
+
+    // 2D camera + keyframe controls
+    if ($('resetView2D')) addListener($('resetView2D'), 'click', resetView2D);
+    if ($('kfAdd')) addListener($('kfAdd'), 'click', addKeyframeAtCurrent);
+    if ($('kfClear')) addListener($('kfClear'), 'click', clearKeyframes);
+    if ($('kfPlay')) addListener($('kfPlay'), 'click', () => {
+      if (timelinePlayActive) stopTimelinePreview(undefined);
+      else previewTimeline();
+    });
+    renderKeyframeList();
+    updateKeyframeStats();
 
     // Capture wiring
     setCaptureMode('image');
@@ -1096,6 +1572,20 @@ export default function Page() {
           <label className="checkbox"><input id="merge" type="checkbox" defaultChecked /> Soft-blend touching letters</label>
         </div>
 
+        <details>
+          <summary>Animation keyframes (2D record)</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+            <div className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</div>
+            <div id="keyframeList" className="kf-list" />
+            <div className="btn-row">
+              <button id="kfAdd" type="button">+ Add at current</button>
+              <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
+              <button id="kfClear" type="button" className="secondary">Clear</button>
+            </div>
+            <div className="hint">Inflate is sampled at each keyframe time, then linearly interpolated. Click record while in 2D mode to capture the animation.</div>
+          </div>
+        </details>
+
         <hr />
 
         <details open>
@@ -1202,17 +1692,21 @@ export default function Page() {
         <div id="stage">
           <svg className="preview" id="preview" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
             <defs id="svgDefs"></defs>
-            <path id="mainPath" />
-            <path id="outlinePath" fill="none" stroke="#fff" strokeLinejoin="round" strokeLinecap="round" />
-            <path id="hiPath" />
+            <g id="viewGroup">
+              <path id="mainPath" />
+              <path id="outlinePath" fill="none" stroke="#fff" strokeLinejoin="round" strokeLinecap="round" />
+              <path id="hiPath" />
+            </g>
           </svg>
           <canvas id="three"></canvas>
+          <canvas id="record2d" hidden width="1920" height="1920"></canvas>
+          <button id="resetView2D" type="button" className="reset-view" aria-label="Reset 2D view">Reset view</button>
           <div className="spinner" id="spin"></div>
         </div>
         <div id="captureBar" className="capture-bar" aria-label="Capture controls">
           <div id="cycleChips" className="cycle-pill" hidden>
             {[1, 2, 3].map((n) => (
-              <button key={n} type="button" className="cycle-chip" data-cycle={n} title={`Stop after ${n} rotation cycle${n === 1 ? '' : 's'}`}>
+              <button key={n} type="button" className="cycle-chip" data-cycle={n} title={`Repeat ${n}× (rotation cycles in 3D, keyframe loops in 2D)`}>
                 <span aria-hidden="true">↻</span>{n}x
               </button>
             ))}
@@ -1229,7 +1723,7 @@ export default function Page() {
               <button key={opt.value} type="button" className="aspect-chip" data-aspect-id={opt.value}>{opt.label}</button>
             ))}
           </div>
-          <div className="capture-hint">Switch on 3D mode to capture the balloon scene.</div>
+          <div className="capture-hint">Photo + video work in both 2D and 3D modes.</div>
         </div>
       </main>
 
