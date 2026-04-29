@@ -1060,6 +1060,7 @@ export default function Page() {
             <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bowlbyonesc/BowlbyOneSC-Regular.ttf">Bowlby One SC</option>
             <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/passionone/PassionOne-Black.ttf">Passion One Black</option>
             <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/changaone/ChangaOne-Regular.ttf">Changa One</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf">Orbitron</option>
           </select>
         </div>
 
