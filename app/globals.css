@@ -7,7 +7,8 @@ body {
   color: #111;
   display: grid;
   grid-template-columns: 320px 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 aside {
   background: #fff;
@@ -17,6 +18,7 @@ aside {
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+  min-height: 0;
 }
 main {
   display: flex;
@@ -25,6 +27,8 @@ main {
   justify-content: center;
   gap: 18px;
   padding: 30px;
+  min-height: 0;
+  overflow: hidden;
 }
 h1 { font-size: 18px; margin: 0 0 4px; }
 .sub { font-size: 12px; color: #666; margin-bottom: 8px; }
@@ -53,26 +57,48 @@ button {
 button.secondary { background: #e5e5ea; color: #111; }
 .btn-row { display: flex; gap: 8px; }
 .btn-row button { flex: 1; }
-.kf-list { display: flex; flex-direction: column; gap: 6px; }
-.kf-row {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto;
-  align-items: center;
-  gap: 6px;
-}
-.kf-row input { width: 100%; padding: 4px 6px; font-size: 12px; }
-.kf-sep { font-size: 11px; color: #888; }
-.kf-delete {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 1px solid #e5e5ea;
+.kf-timeline {
+  display: block;
+  width: 100%;
+  height: 140px;
   background: #fff;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
+  border: 1px solid #e5e5ea;
+  border-radius: 8px;
+  cursor: crosshair;
+  touch-action: none;
+  overflow: visible;
 }
-.kf-delete:hover { background: #fef2f2; border-color: #fecaca; }
+.kf-grid { stroke: #e5e5ea; stroke-width: 0.05; vector-effect: non-scaling-stroke; }
+.kf-curve {
+  fill: none;
+  stroke: #0a84ff;
+  stroke-width: 1.5;
+  stroke-opacity: 0.55;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.kf-marker {
+  fill: #0a84ff;
+  stroke: #fff;
+  stroke-width: 1;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+.kf-marker.selected { stroke: #00d4ff; stroke-width: 2; }
+.kf-marker:hover { fill: #339cff; }
+.kf-axis-label {
+  font-size: 4px;
+  fill: #999;
+  font-family: -apple-system, sans-serif;
+  pointer-events: none;
+  user-select: none;
+}
+.kf-playhead {
+  stroke: #ff2d55;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
 #stage {
   background: #fff;
   border-radius: 12px;

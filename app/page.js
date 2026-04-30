@@ -25,10 +25,12 @@ import { svgTextToPolys } from './svg-paths.mjs';
 import {
   IDENTITY_VIEW_2D,
   applyView2D,
+  clampKeyframe,
   interpolateKeyframes,
   keyframeDuration,
   renderToCanvas,
   rotateViewBetween,
+  timelineDuration,
   unionViewBox,
   zoomViewAt,
 } from './render2d.mjs';
@@ -621,6 +623,9 @@ export default function Page() {
     }
 
     function render() {
+      // The recording pre-pass owns the worker; suppress interactive renders
+      // so the user's slider drags don't overwrite queued frames.
+      if (recordingActive) return;
       if (rafScheduled) return;
       rafScheduled = true;
       requestAnimationFrame(() => {
@@ -972,59 +977,193 @@ export default function Page() {
       }
     }
 
-    function renderKeyframeList() {
-      const list = $('keyframeList');
-      if (!list) return;
-      list.innerHTML = '';
+    // Timeline geometry constants. The SVG uses a normalized viewBox where
+    // x = time-seconds and y = (60 - value), so y=0 is the top (max inflate)
+    // and y=60 is the bottom. The whole control auto-scales to its CSS box.
+    const KF_VALUE_MAX = 60;
+    const KF_PAD_LEFT = 0.15;   // seconds — left margin so 0s isn't on the edge
+    const KF_PAD_RIGHT = 0.15;
+    const KF_PAD_TOP = 4;       // value units
+    const KF_PAD_BOTTOM = 6;
+    let kfSelectedIndex = -1;
+    let kfDraggingIndex = -1;
+    let kfDidDrag = false;
+    let kfPlayheadTime = -1;
+
+    function timelineViewBox() {
+      const dur = timelineDuration(keyframes, 4);
+      // Pad both axes so markers at the extremes aren't half-clipped.
+      const w = dur + KF_PAD_LEFT + KF_PAD_RIGHT;
+      const h = KF_VALUE_MAX + KF_PAD_TOP + KF_PAD_BOTTOM;
+      return { dur, w, h, minX: -KF_PAD_LEFT, minY: -KF_PAD_TOP };
+    }
+
+    // Convert a screen pointer event into (time, value) within the timeline
+    // SVG's user space, clamped to legal ranges.
+    function timelineEventCoords(svg, ev) {
+      const pt = svg.createSVGPoint();
+      pt.x = ev.clientX; pt.y = ev.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return { time: 0, value: 0 };
+      const u = pt.matrixTransform(ctm.inverse());
+      const time = Math.max(0, u.x);
+      const value = Math.max(0, Math.min(KF_VALUE_MAX, KF_VALUE_MAX - u.y));
+      return { time, value };
+    }
+
+    function renderKeyframeTimeline() {
+      const svg = $('kfTimeline');
+      if (!svg) return;
+      const { dur, w, h, minX, minY } = timelineViewBox();
+      svg.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+
+      // Build SVG content as a single innerHTML pass so we don't churn
+      // hundreds of nodes every drag tick.
+      let html = '';
+
+      // Grid: vertical second markers, horizontal value lines (0/30/60).
+      for (let s = 0; s <= Math.floor(dur); s++) {
+        html += `<line class="kf-grid" x1="${s}" y1="0" x2="${s}" y2="${KF_VALUE_MAX}" />`;
+        html += `<text class="kf-axis-label" x="${s}" y="${KF_VALUE_MAX + KF_PAD_BOTTOM - 1}" text-anchor="middle">${s}s</text>`;
+      }
+      for (const v of [0, 30, 60]) {
+        const y = KF_VALUE_MAX - v;
+        html += `<line class="kf-grid" x1="0" y1="${y}" x2="${dur}" y2="${y}" />`;
+        html += `<text class="kf-axis-label" x="${-KF_PAD_LEFT + 0.02}" y="${y + 1}" text-anchor="start">${v}</text>`;
+      }
+
+      // Curve: polyline through all keyframes (sorted by time).
+      if (keyframes.length >= 2) {
+        const pts = keyframes
+          .map((k) => `${k.time},${KF_VALUE_MAX - k.value}`)
+          .join(' ');
+        html += `<polyline class="kf-curve" points="${pts}" />`;
+      }
+
+      // Markers — drawn last so they sit on top.
       for (let i = 0; i < keyframes.length; i++) {
         const k = keyframes[i];
-        const row = document.createElement('div');
-        row.className = 'kf-row';
-        row.innerHTML = `
-          <input class="kf-time" type="number" step="0.1" min="0" value="${k.time}" aria-label="Time (seconds)" />
-          <span class="kf-sep">s</span>
-          <input class="kf-value" type="number" step="1" min="0" max="60" value="${k.inflate}" aria-label="Inflate" />
-          <button class="kf-delete" type="button" aria-label="Delete keyframe">×</button>
-        `;
-        const tIn = row.querySelector('.kf-time');
-        const vIn = row.querySelector('.kf-value');
-        const del = row.querySelector('.kf-delete');
-        tIn.addEventListener('input', () => {
-          k.time = Math.max(0, +tIn.value || 0);
-          sortKeyframes();
-          updateKeyframeStats();
-        });
-        vIn.addEventListener('input', () => {
-          k.inflate = Math.max(0, Math.min(60, +vIn.value || 0));
-          updateKeyframeStats();
-        });
-        del.addEventListener('click', () => {
-          keyframes.splice(keyframes.indexOf(k), 1);
-          renderKeyframeList();
-          updateKeyframeStats();
-        });
-        list.appendChild(row);
+        const cx = k.time;
+        const cy = KF_VALUE_MAX - k.value;
+        const cls = i === kfSelectedIndex ? 'kf-marker selected' : 'kf-marker';
+        html += `<circle class="${cls}" data-i="${i}" cx="${cx}" cy="${cy}" r="1.6" />`;
       }
+
+      // Playhead.
+      if (kfPlayheadTime >= 0) {
+        html += `<line class="kf-playhead" x1="${kfPlayheadTime}" y1="0" x2="${kfPlayheadTime}" y2="${KF_VALUE_MAX}" />`;
+      }
+
+      svg.innerHTML = html;
+
+      // Show/hide the delete button based on selection.
+      const del = $('kfDelete');
+      if (del) del.hidden = kfSelectedIndex < 0;
+    }
+
+    function setKeyframes(next) {
+      keyframes = next;
+      sortKeyframes();
+      renderKeyframeTimeline();
+      updateKeyframeStats();
     }
 
     function addKeyframeAtCurrent() {
       const lastTime = keyframes.length ? keyframes[keyframes.length - 1].time : -1;
       const time = lastTime < 0 ? 0 : Math.round((lastTime + 1) * 100) / 100;
-      keyframes.push({ time, inflate: +$('inflate').value });
+      keyframes.push(clampKeyframe({ time, value: +$('inflate').value }, KF_VALUE_MAX));
       sortKeyframes();
-      renderKeyframeList();
+      kfSelectedIndex = keyframes.length - 1;
+      renderKeyframeTimeline();
       updateKeyframeStats();
     }
 
     function clearKeyframes() {
       keyframes = [];
-      renderKeyframeList();
+      kfSelectedIndex = -1;
+      renderKeyframeTimeline();
       updateKeyframeStats();
+    }
+
+    function deleteSelectedKeyframe() {
+      if (kfSelectedIndex < 0 || kfSelectedIndex >= keyframes.length) return;
+      keyframes.splice(kfSelectedIndex, 1);
+      kfSelectedIndex = -1;
+      renderKeyframeTimeline();
+      updateKeyframeStats();
+    }
+
+    function setupTimelinePointer() {
+      const svg = $('kfTimeline');
+      if (!svg) return;
+      let pointerId = null;
+      let dragStartT = 0, dragStartV = 0;
+      const onDown = (ev) => {
+        const target = ev.target;
+        if (target && target.classList && target.classList.contains('kf-marker')) {
+          const i = +target.getAttribute('data-i');
+          if (Number.isInteger(i)) {
+            kfDraggingIndex = i;
+            kfDidDrag = false;
+            kfSelectedIndex = i;
+            const { time, value } = timelineEventCoords(svg, ev);
+            dragStartT = time; dragStartV = value;
+            pointerId = ev.pointerId;
+            try { svg.setPointerCapture(pointerId); } catch (_) {}
+            renderKeyframeTimeline();
+            ev.preventDefault();
+            return;
+          }
+        }
+        // Empty-space click: add a keyframe at the cursor.
+        const { time, value } = timelineEventCoords(svg, ev);
+        keyframes.push(clampKeyframe({ time, value }, KF_VALUE_MAX));
+        sortKeyframes();
+        kfSelectedIndex = keyframes.findIndex((k) => k.time === time && k.value === value);
+        kfDraggingIndex = kfSelectedIndex;
+        kfDidDrag = false;
+        pointerId = ev.pointerId;
+        try { svg.setPointerCapture(pointerId); } catch (_) {}
+        renderKeyframeTimeline();
+        updateKeyframeStats();
+        ev.preventDefault();
+      };
+      const onMove = (ev) => {
+        if (kfDraggingIndex < 0 || ev.pointerId !== pointerId) return;
+        const { time, value } = timelineEventCoords(svg, ev);
+        if (Math.abs(time - dragStartT) > 0.01 || Math.abs(value - dragStartV) > 0.5) kfDidDrag = true;
+        const k = keyframes[kfDraggingIndex];
+        if (!k) return;
+        const next = clampKeyframe({ ...k, time, value }, KF_VALUE_MAX);
+        keyframes[kfDraggingIndex] = next;
+        renderKeyframeTimeline();
+        updateKeyframeStats();
+      };
+      const onUp = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        // Re-sort (drag may have crossed a neighbor) and recover the selected
+        // index by identity.
+        if (kfDraggingIndex >= 0) {
+          const dragged = keyframes[kfDraggingIndex];
+          sortKeyframes();
+          kfSelectedIndex = keyframes.indexOf(dragged);
+        }
+        kfDraggingIndex = -1;
+        try { svg.releasePointerCapture(pointerId); } catch (_) {}
+        pointerId = null;
+        renderKeyframeTimeline();
+      };
+      addListener(svg, 'pointerdown', onDown);
+      addListener(svg, 'pointermove', onMove);
+      addListener(svg, 'pointerup', onUp);
+      addListener(svg, 'pointercancel', onUp);
     }
 
     let timelinePlayActive = false;
     let timelinePlayTimer = 0;
-    function previewTimeline() {
+    let timelinePlayBusy = false;
+    async function previewTimeline() {
       if (timelinePlayActive) return;
       if (keyframes.length < 2) {
         status('Add at least two keyframes to preview the timeline.');
@@ -1036,18 +1175,35 @@ export default function Page() {
       const startedAt = performance.now();
       timelinePlayActive = true;
       $('kfPlay').textContent = '■ Stop preview';
-      const tick = () => {
+      const tick = async () => {
         if (!timelinePlayActive) return;
+        if (timelinePlayBusy) {
+          // The worker is still computing the previous tick — try again.
+          timelinePlayTimer = setTimeout(tick, frameMs);
+          return;
+        }
         const t = (performance.now() - startedAt) / 1000;
+        kfPlayheadTime = t;
+        renderKeyframeTimeline();
         if (t >= dur) {
           stopTimelinePreview(original);
           return;
         }
         const v = interpolateKeyframes(keyframes, t, original);
-        $('inflate').value = v;
-        const out = $('inflateVal');
-        if (out) out.textContent = v.toFixed(0);
-        render();
+        timelinePlayBusy = true;
+        try {
+          const res = await submitJobAsync({ inflate: v });
+          if (!timelinePlayActive) return;
+          // Mirror submitJob's interactive side-effects: update slider readout
+          // and apply the worker result to the SVG.
+          $('inflate').value = v;
+          const out = $('inflateVal');
+          if (out) out.textContent = v.toFixed(0);
+          lastRings = res.rings || [];
+          applyToDOM(res.params, res);
+        } finally {
+          timelinePlayBusy = false;
+        }
         timelinePlayTimer = setTimeout(tick, frameMs);
       };
       tick();
@@ -1055,6 +1211,8 @@ export default function Page() {
 
     function stopTimelinePreview(restoreValue) {
       timelinePlayActive = false;
+      kfPlayheadTime = -1;
+      renderKeyframeTimeline();
       if (timelinePlayTimer) { clearTimeout(timelinePlayTimer); timelinePlayTimer = 0; }
       const btn = $('kfPlay');
       if (btn) btn.textContent = '▶ Preview';
@@ -1422,11 +1580,13 @@ export default function Page() {
     if ($('resetView2D')) addListener($('resetView2D'), 'click', resetView2D);
     if ($('kfAdd')) addListener($('kfAdd'), 'click', addKeyframeAtCurrent);
     if ($('kfClear')) addListener($('kfClear'), 'click', clearKeyframes);
+    if ($('kfDelete')) addListener($('kfDelete'), 'click', deleteSelectedKeyframe);
     if ($('kfPlay')) addListener($('kfPlay'), 'click', () => {
       if (timelinePlayActive) stopTimelinePreview(undefined);
       else previewTimeline();
     });
-    renderKeyframeList();
+    setupTimelinePointer();
+    renderKeyframeTimeline();
     updateKeyframeStats();
 
     // Capture wiring
@@ -1576,13 +1736,14 @@ export default function Page() {
           <summary>Animation keyframes (2D record)</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
             <div className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</div>
-            <div id="keyframeList" className="kf-list" />
+            <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
             <div className="btn-row">
               <button id="kfAdd" type="button">+ Add at current</button>
               <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
               <button id="kfClear" type="button" className="secondary">Clear</button>
             </div>
-            <div className="hint">Inflate is sampled at each keyframe time, then linearly interpolated. Click record while in 2D mode to capture the animation.</div>
+            <button id="kfDelete" type="button" className="secondary" hidden>Delete selected keyframe</button>
+            <div className="hint">Click the timeline to add a keyframe; drag to move one. The vertical axis is the inflate value (0–60), horizontal is time. Hit record while in 2D mode to capture the animation.</div>
           </div>
         </details>
 

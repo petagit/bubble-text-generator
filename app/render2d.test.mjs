@@ -4,11 +4,13 @@ import test from 'node:test';
 import {
   IDENTITY_VIEW_2D,
   applyMat2D,
+  clampKeyframe,
   interpolateKeyframes,
   invertMat2D,
   keyframeDuration,
   mat2DFor,
   svgTransformFor,
+  timelineDuration,
   unionViewBox,
 } from './render2d.mjs';
 
@@ -107,4 +109,28 @@ test('unionViewBox covers all frames with padding', () => {
 
 test('unionViewBox falls back to a unit box when empty', () => {
   assert.deepEqual(unionViewBox([], 0), [0, 0, 1, 1]);
+});
+
+test('timelineDuration is at least minSeconds and one second past the last keyframe', () => {
+  assert.equal(timelineDuration([], 4), 4);
+  assert.equal(timelineDuration([{ time: 1, value: 0 }], 4), 4);
+  assert.equal(timelineDuration([{ time: 5, value: 0 }, { time: 7, value: 0 }], 4), 8);
+});
+
+test('clampKeyframe clamps time non-negative and value into [0, max]', () => {
+  assert.deepEqual(clampKeyframe({ time: -1, value: 99 }, 60), { time: 0, value: 60 });
+  assert.deepEqual(clampKeyframe({ time: 2.5, value: 30 }, 60), { time: 2.5, value: 30 });
+  assert.deepEqual(clampKeyframe({ time: 1, value: -5 }, 60), { time: 1, value: 0 });
+});
+
+// Regression test: keyframes are stored as `{ time, value }` and
+// interpolateKeyframes reads `value`. A schema drift back to `inflate` would
+// reintroduce the NaN-animation bug from commit 81d0b1a.
+test('interpolateKeyframes uses the .value property (schema regression)', () => {
+  const ok = [{ time: 0, value: 10 }, { time: 1, value: 20 }];
+  assert.equal(interpolateKeyframes(ok, 0.5), 15);
+  // If a developer accidentally wrote `inflate` instead, NaN would propagate:
+  const wrong = [{ time: 0, inflate: 10 }, { time: 1, inflate: 20 }];
+  const result = interpolateKeyframes(wrong, 0.5);
+  assert.ok(Number.isNaN(result), 'a non-.value schema should return NaN, exposing the bug');
 });

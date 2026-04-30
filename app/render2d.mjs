@@ -230,6 +230,24 @@ export function keyframeDuration(keyframes) {
   return max;
 }
 
+// Visible track duration: at least `minSeconds`, otherwise one second past the
+// last keyframe. Used so the timeline always has some empty space at the end
+// for the user to grab when adding a new keyframe.
+export function timelineDuration(keyframes, minSeconds = 4) {
+  const lastTime = (Array.isArray(keyframes) && keyframes.length)
+    ? keyframes.reduce((m, k) => (k.time > m ? k.time : m), 0)
+    : 0;
+  return Math.max(minSeconds, lastTime + 1);
+}
+
+// Returns a new keyframe with `time` clamped non-negative and `value` clamped
+// to [0, maxValue]. Used during drags so markers can't escape the track.
+export function clampKeyframe(k, maxValue = 60) {
+  const time = Math.max(0, +k.time || 0);
+  const value = Math.max(0, Math.min(maxValue, +k.value || 0));
+  return { ...k, time, value };
+}
+
 // Compute the union bounding box of a list of `[minX, minY, maxX, maxY]`
 // frame bboxes plus padding, returned as `[minX, minY, w, h]` for the SVG
 // viewBox.
