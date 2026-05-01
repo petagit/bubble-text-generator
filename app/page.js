@@ -430,13 +430,28 @@ export default function Page() {
       recorderHandle.stopped.then(({ blob, duration }) => {
         lastVideoBlob = blob;
         lastVideoDuration = duration;
-        if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
-        lastVideoUrl = URL.createObjectURL(blob);
-        const v = $('videoPreview');
-        v.src = lastVideoUrl;
-        v.play().catch(() => {});
-        $('videoModal').classList.add('open');
+        openVideoReady();
       });
+    }
+
+    // Open the post-recording modal with a download-call-to-action highlight.
+    // Both the 3D and 2D video paths share this so the reminder is consistent.
+    function openVideoReady() {
+      if (!lastVideoBlob) return;
+      if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
+      lastVideoUrl = URL.createObjectURL(lastVideoBlob);
+      const v = $('videoPreview');
+      v.src = lastVideoUrl;
+      v.play().catch(() => {});
+      $('videoModal').classList.add('open');
+      const banner = $('videoReadyBanner');
+      if (banner) banner.classList.remove('hidden');
+      const dl = $('videoDownload');
+      if (dl) {
+        dl.classList.add('attention');
+        dl.focus({ preventScroll: true });
+      }
+      status('Recording ready — tap Download in the preview to save it.');
     }
 
     function stopVideoRecording() {
@@ -467,6 +482,8 @@ export default function Page() {
       const labelEl = $('videoDownloadLabel');
       const progressEl = $('videoDownloadProgress');
       const origLabel = labelEl.textContent;
+      // Once the user has acted on the download CTA, drop the highlight.
+      btn.classList.remove('attention');
 
       // Fast path: original WebM with no resize/crop needed.
       if (format === 'webm' && !aspect && captureVideoResolution >= 1920) {
@@ -514,6 +531,8 @@ export default function Page() {
       if (lastVideoUrl) { URL.revokeObjectURL(lastVideoUrl); lastVideoUrl = null; }
       lastVideoBlob = null;
       lastVideoDuration = 0;
+      const dl = $('videoDownload');
+      if (dl) dl.classList.remove('attention');
     }
 
     /* ============================================================
@@ -1537,12 +1556,7 @@ export default function Page() {
       recorderHandle.stopped.then(({ blob, duration }) => {
         lastVideoBlob = blob;
         lastVideoDuration = duration;
-        if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
-        lastVideoUrl = URL.createObjectURL(blob);
-        const v = $('videoPreview');
-        v.src = lastVideoUrl;
-        v.play().catch(() => {});
-        $('videoModal').classList.add('open');
+        openVideoReady();
       });
     }
 
@@ -2103,6 +2117,9 @@ export default function Page() {
           </div>
           <div className="modal-video">
             <video id="videoPreview" controls loop muted playsInline />
+          </div>
+          <div id="videoReadyBanner" className="modal-banner" role="status">
+            ✓ Recording ready — pick a format below, then tap <strong>Download</strong> to save.
           </div>
           <div className="modal-controls">
             <label className="modal-field">

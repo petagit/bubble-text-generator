@@ -638,6 +638,28 @@ button[disabled], .material-chip[disabled], .hdr-chip[disabled] {
   z-index: 1;
 }
 button:disabled { opacity: 0.55; cursor: progress; }
+.modal-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(10,132,255,0.12);
+  color: #0a3a7a;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid rgba(10,132,255,0.25);
+}
+.modal-banner.hidden { display: none; }
+.modal-banner strong { color: inherit; font-weight: 700; }
+@keyframes kf-cta-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(10,132,255,0.55); }
+  60%  { box-shadow: 0 0 0 10px rgba(10,132,255,0); }
+  100% { box-shadow: 0 0 0 0 rgba(10,132,255,0); }
+}
+.progress-btn.attention {
+  animation: kf-cta-pulse 1.6s ease-out 0s 3;
+}
 @media (prefers-color-scheme: dark) {
   body { background: #1c1c1e; color: #eee; }
   aside { background: #2c2c2e; border-color: #3a3a3c; }
