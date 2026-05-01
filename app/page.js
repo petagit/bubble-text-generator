@@ -1750,21 +1750,6 @@ export default function Page() {
           <label className="checkbox"><input id="merge" type="checkbox" defaultChecked /> Soft-blend touching letters</label>
         </div>
 
-        <details>
-          <summary>Animation keyframes (2D record)</summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-            <div className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</div>
-            <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
-            <div className="btn-row">
-              <button id="kfAdd" type="button">+ Add at current</button>
-              <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
-              <button id="kfClear" type="button" className="secondary">Clear</button>
-            </div>
-            <button id="kfDelete" type="button" className="secondary" hidden>Delete selected keyframe</button>
-            <div className="hint">Click the timeline to add a keyframe; drag to move one. The vertical axis is the inflate value (0–60), horizontal is time. Hit record while in 2D mode to capture the animation.</div>
-          </div>
-        </details>
-
         <hr />
 
         <details open>
@@ -1904,6 +1889,22 @@ export default function Page() {
           </div>
           <div className="capture-hint">Photo + video work in both 2D and 3D modes.</div>
         </div>
+        <section id="kfPanel" className="kf-panel" aria-label="Animation keyframes">
+          <div className="kf-panel-head">
+            <strong>Animation keyframes (2D record)</strong>
+            <span className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</span>
+          </div>
+          <div className="kf-panel-body">
+            <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
+            <div className="kf-panel-actions">
+              <button id="kfAdd" type="button">+ Add at current</button>
+              <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
+              <button id="kfClear" type="button" className="secondary">Clear</button>
+              <button id="kfDelete" type="button" className="secondary" hidden>Delete keyframe</button>
+              <span className="hint kf-panel-hint">Click to add · drag to move · Y = inflate (0–60), X = time</span>
+            </div>
+          </div>
+        </section>
       </main>
 
       <div id="recIndicator" className="rec-indicator" aria-live="polite">
