@@ -310,15 +310,40 @@ export default function Page() {
       }
     }
 
+    // Render the current 2D frame to an off-screen canvas at the chosen
+    // resolution and aspect, returning { dataUrl, width, height }. The same
+    // renderToCanvas path used during 2D video recording is reused here so
+    // the photo and video framings stay identical.
+    function captureImage2D(resolution) {
+      if (!lastGeom || !lastGeom.d) return null;
+      const userAspect = aspectRatioForOption(captureAspectId);
+      const vb = currentViewBoxArray();
+      const vbAspect = (vb && vb[2] > 0 && vb[3] > 0) ? vb[2] / vb[3] : 1;
+      const aspect = (userAspect && userAspect > 0) ? userAspect : vbAspect;
+      const W = Math.max(2, Math.round(resolution));
+      const H = Math.max(2, Math.round(W / aspect));
+      const cv = document.createElement('canvas');
+      cv.width = W;
+      cv.height = H;
+      const bg = captureWithBackground
+        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#1f2228' : '#eef1f6')
+        : null;
+      renderToCanvas(cv, lastGeom, readParams(), view2D, vb, { background: bg });
+      return { dataUrl: cv.toDataURL('image/png'), width: W, height: H };
+    }
+
     function refreshImagePreview(resolution = 720) {
-      if (!$('mode3d').checked || !currentMesh) return null;
-      const result = captureImageFromScene({
-        renderer, scene, camera,
-        resolution,
-        withBackground: captureWithBackground,
-        backgroundColor: currentCaptureBackgroundColor(),
-        aspectRatio: aspectRatioForOption(captureAspectId),
-      });
+      const is3D = $('mode3d').checked;
+      const result = is3D
+        ? (currentMesh ? captureImageFromScene({
+            renderer, scene, camera,
+            resolution,
+            withBackground: captureWithBackground,
+            backgroundColor: currentCaptureBackgroundColor(),
+            aspectRatio: aspectRatioForOption(captureAspectId),
+          }) : null)
+        : captureImage2D(resolution);
+      if (!result) return null;
       lastImageDataUrl = result.dataUrl;
       $('imagePreview').src = result.dataUrl;
       needsRender = true;
@@ -328,7 +353,10 @@ export default function Page() {
     function openImageModal() {
       const result = refreshImagePreview(720);
       if (!result) {
-        status('Switch on 3D mode first to capture an image.');
+        const msg = $('mode3d').checked
+          ? 'Switch on 3D mode first to capture an image.'
+          : 'Type some text first to capture an image.';
+        status(msg);
         return;
       }
       $('imageModal').classList.add('open');
@@ -340,15 +368,20 @@ export default function Page() {
     }
 
     function downloadImageHiRes() {
-      const result = captureImageFromScene({
-        renderer, scene, camera,
-        resolution: captureImageResolution,
-        withBackground: captureWithBackground,
-        backgroundColor: currentCaptureBackgroundColor(),
-        aspectRatio: aspectRatioForOption(captureAspectId),
-      });
+      const is3D = $('mode3d').checked;
+      const result = is3D
+        ? captureImageFromScene({
+            renderer, scene, camera,
+            resolution: captureImageResolution,
+            withBackground: captureWithBackground,
+            backgroundColor: currentCaptureBackgroundColor(),
+            aspectRatio: aspectRatioForOption(captureAspectId),
+          })
+        : captureImage2D(captureImageResolution);
+      if (!result) return;
       needsRender = true;
-      downloadDataUrl(result.dataUrl, 'bubble-text-3d.png');
+      const filename = is3D ? 'bubble-text-3d.png' : 'bubble-text.png';
+      downloadDataUrl(result.dataUrl, filename);
     }
 
     function startVideoRecording() {
@@ -1340,10 +1373,15 @@ export default function Page() {
       const frozenViewBox = unionViewBox(frames.map((f) => f.bbox), 40);
       frozenViewBox2D = frozenViewBox;
 
-      // Size the record canvas to match the chosen export resolution while
-      // preserving the frozen viewBox aspect ratio.
+      // Size the record canvas. If the user picked an aspect chip, honour it;
+      // otherwise fall back to the geometry's frozen viewBox aspect so "Auto"
+      // tracks the silhouette. renderToCanvas uses preserveAspectRatio:meet,
+      // so the geometry is letterboxed inside whatever frame we set here.
       const targetW = captureVideoResolution || 1920;
-      const aspect = frozenViewBox[2] / frozenViewBox[3] || 1;
+      const userAspect = aspectRatioForOption(captureAspectId);
+      const aspect = (userAspect && userAspect > 0)
+        ? userAspect
+        : (frozenViewBox[2] / frozenViewBox[3] || 1);
       recordCanvas.width = Math.max(2, Math.round(targetW));
       recordCanvas.height = Math.max(2, Math.round(targetW / aspect));
 
