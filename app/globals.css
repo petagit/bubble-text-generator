@@ -87,7 +87,6 @@ button.secondary { background: #e5e5ea; color: #111; }
 .kf-marker.selected { stroke: #00d4ff; stroke-width: 2; }
 .kf-marker:hover { fill: #339cff; }
 .kf-axis-label {
-  font-size: 4px;
   fill: #999;
   font-family: -apple-system, sans-serif;
   pointer-events: none;

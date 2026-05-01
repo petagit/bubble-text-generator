@@ -1018,19 +1018,30 @@ export default function Page() {
       svg.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
       svg.setAttribute('preserveAspectRatio', 'none');
 
-      // Build SVG content as a single innerHTML pass so we don't churn
-      // hundreds of nodes every drag tick.
+      // The SVG uses preserveAspectRatio="none" so x and y scale independently.
+      // We need pixel→user scales to keep markers round and labels readable.
+      const pxW = svg.clientWidth || 280;
+      const pxH = svg.clientHeight || 140;
+      const sx = w / pxW;   // user units per pixel, x
+      const sy = h / pxH;   // user units per pixel, y
+      const MARKER_PX = 6;
+      const FONT_PX = 10;
+      const rx = MARKER_PX * sx;
+      const ry = MARKER_PX * sy;
+      const fontX = FONT_PX * sx;
+      const fontY = FONT_PX * sy;
+
       let html = '';
 
       // Grid: vertical second markers, horizontal value lines (0/30/60).
       for (let s = 0; s <= Math.floor(dur); s++) {
         html += `<line class="kf-grid" x1="${s}" y1="0" x2="${s}" y2="${KF_VALUE_MAX}" />`;
-        html += `<text class="kf-axis-label" x="${s}" y="${KF_VALUE_MAX + KF_PAD_BOTTOM - 1}" text-anchor="middle">${s}s</text>`;
+        html += `<text class="kf-axis-label" x="${s}" y="${KF_VALUE_MAX + KF_PAD_BOTTOM - fontY * 0.3}" text-anchor="middle" font-size="${fontY}">${s}s</text>`;
       }
       for (const v of [0, 30, 60]) {
         const y = KF_VALUE_MAX - v;
         html += `<line class="kf-grid" x1="0" y1="${y}" x2="${dur}" y2="${y}" />`;
-        html += `<text class="kf-axis-label" x="${-KF_PAD_LEFT + 0.02}" y="${y + 1}" text-anchor="start">${v}</text>`;
+        html += `<text class="kf-axis-label" x="${-KF_PAD_LEFT + fontX * 0.1}" y="${y + fontY * 0.35}" text-anchor="start" font-size="${fontY}">${v}</text>`;
       }
 
       // Curve: polyline through all keyframes (sorted by time).
@@ -1041,13 +1052,14 @@ export default function Page() {
         html += `<polyline class="kf-curve" points="${pts}" />`;
       }
 
-      // Markers — drawn last so they sit on top.
+      // Markers — ellipses sized in pixel space so they stay round under
+      // non-uniform aspect scaling.
       for (let i = 0; i < keyframes.length; i++) {
         const k = keyframes[i];
         const cx = k.time;
         const cy = KF_VALUE_MAX - k.value;
         const cls = i === kfSelectedIndex ? 'kf-marker selected' : 'kf-marker';
-        html += `<circle class="${cls}" data-i="${i}" cx="${cx}" cy="${cy}" r="1.6" />`;
+        html += `<ellipse class="${cls}" data-i="${i}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" />`;
       }
 
       // Playhead.
@@ -1588,6 +1600,12 @@ export default function Page() {
     setupTimelinePointer();
     renderKeyframeTimeline();
     updateKeyframeStats();
+    // Re-render on resize so markers/labels stay round under non-uniform aspect.
+    const kfSvg = $('kfTimeline');
+    if (kfSvg && typeof ResizeObserver !== 'undefined') {
+      const kfRO = new ResizeObserver(() => renderKeyframeTimeline());
+      kfRO.observe(kfSvg);
+    }
 
     // Capture wiring
     setCaptureMode('image');
