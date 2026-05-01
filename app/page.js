@@ -26,11 +26,12 @@ import {
   IDENTITY_VIEW_2D,
   applyView2D,
   clampKeyframe,
-  interpolateKeyframes,
-  keyframeDuration,
+  interpolateTracks,
   renderToCanvas,
   rotateViewBetween,
   timelineDuration,
+  tracksDuration,
+  tracksKeyframeCount,
   unionViewBox,
   zoomViewAt,
 } from './render2d.mjs';
@@ -624,9 +625,34 @@ export default function Page() {
     // canvas so a recorded clip reflects whatever framing the user picked.
     let view2D = { ...IDENTITY_VIEW_2D };
 
-    // User-authored animation keyframes for the inflate parameter.
-    // Sorted by time on every mutation. Empty list = no animation.
-    let keyframes = [];
+    // User-authored animation tracks. One entry per animatable parameter; the
+    // active track is the one mouse clicks/drags edit. Each track is sorted
+    // by time on mutation. An empty track contributes nothing — the slider's
+    // current value wins via the `base` overlay in interpolateTracks.
+    const KF_TRACK_DEFS = [
+      { id: 'inflate', label: 'Inflate',        color: '#0a84ff', max: 60,  valueOffset: 0,    format: (v) => v.toFixed(0) },
+      { id: 'blur',    label: 'Bubble blend',   color: '#ff9f0a', max: 20,  valueOffset: 0,    format: (v) => v.toFixed(0) },
+      { id: 'spacing', label: 'Letter spacing', color: '#bf5af2', max: 200, valueOffset: -100, format: (v) => (v - 100).toFixed(0) },
+    ];
+    const KF_TRACK_BY_ID = Object.fromEntries(KF_TRACK_DEFS.map((t) => [t.id, t]));
+    let kfTracks = Object.fromEntries(KF_TRACK_DEFS.map((t) => [t.id, []]));
+    let kfActiveTrackId = 'inflate';
+    function activeTrackDef() { return KF_TRACK_BY_ID[kfActiveTrackId] || KF_TRACK_DEFS[0]; }
+    function activeTrack() { return kfTracks[kfActiveTrackId] || []; }
+    // Convert a slider value into / out of the track's value space. Most
+    // tracks store the slider value directly; spacing has a -60..60 slider
+    // range which we shift into 0..120 so it shares the unsigned [0, max]
+    // model the timeline assumes.
+    function sliderToTrackValue(id, sliderVal) {
+      const def = KF_TRACK_BY_ID[id];
+      const off = def && Number.isFinite(def.valueOffset) ? def.valueOffset : 0;
+      return +sliderVal - off;
+    }
+    function trackValueToSlider(id, trackVal) {
+      const def = KF_TRACK_BY_ID[id];
+      const off = def && Number.isFinite(def.valueOffset) ? def.valueOffset : 0;
+      return +trackVal + off;
+    }
 
     // While recording the viewBox is frozen to the union of all pre-rendered
     // frames so that bbox jitter (caused by `merge` blending different
@@ -992,21 +1018,18 @@ export default function Page() {
     /* ============================================================
        KEYFRAME ANIMATION (2D mode)
        ============================================================ */
-    function sortKeyframes() {
-      keyframes.sort((a, b) => a.time - b.time);
-    }
-
     function updateKeyframeStats() {
       const stats = $('keyframeStats');
       if (!stats) return;
-      if (keyframes.length === 0) {
+      const total = tracksKeyframeCount(kfTracks);
+      const dur = tracksDuration(kfTracks);
+      if (total === 0) {
         stats.textContent = 'No keyframes — record will capture a 2-second static clip.';
-      } else if (keyframes.length === 1) {
-        stats.textContent = '1 keyframe — record will capture a 2-second static clip.';
+      } else if (dur <= 0) {
+        stats.textContent = `${total} keyframe${total === 1 ? '' : 's'} — record will capture a 2-second static clip.`;
       } else {
-        const dur = keyframeDuration(keyframes);
         const frames = Math.ceil(dur * 30);
-        stats.textContent = `${keyframes.length} keyframes · ${dur.toFixed(2)}s · ${frames} frames @ 30fps`;
+        stats.textContent = `${total} keyframe${total === 1 ? '' : 's'} · ${dur.toFixed(2)}s · ${frames} frames @ 30fps`;
       }
     }
 
@@ -1014,8 +1037,7 @@ export default function Page() {
     // uses a 1:1 viewBox (preserveAspectRatio="xMinYMin meet") so circles,
     // strokes, and text all render at their natural pixel size regardless
     // of the panel's width or height.
-    const KF_VALUE_MAX = 60;
-    const KF_PAD_LEFT_PX = 32;     // room for "60" / "30" / "0" labels
+    const KF_PAD_LEFT_PX = 38;     // room for axis labels (e.g. "200")
     const KF_PAD_RIGHT_PX = 12;
     const KF_PAD_TOP_PX = 10;
     const KF_PAD_BOTTOM_PX = 22;   // room for "0s 1s 2s …" labels
@@ -1025,27 +1047,32 @@ export default function Page() {
     let kfDidDrag = false;
     let kfPlayheadTime = -1;
 
+    function sortTrack(arr) { arr.sort((a, b) => a.time - b.time); }
+
     function timelinePixelMetrics(svg) {
-      const dur = timelineDuration(keyframes, 4);
+      const def = activeTrackDef();
+      const dur = timelineDuration(kfTracks, 4);
       const W = Math.max(80, svg.clientWidth || 280);
       const H = Math.max(60, svg.clientHeight || 140);
       const plotW = Math.max(1, W - KF_PAD_LEFT_PX - KF_PAD_RIGHT_PX);
       const plotH = Math.max(1, H - KF_PAD_TOP_PX - KF_PAD_BOTTOM_PX);
+      const max = def.max;
       const timeToX = (t) => KF_PAD_LEFT_PX + (t / dur) * plotW;
-      const valueToY = (v) => KF_PAD_TOP_PX + (1 - v / KF_VALUE_MAX) * plotH;
+      const valueToY = (v) => KF_PAD_TOP_PX + (1 - v / max) * plotH;
       const xToTime = (x) => ((x - KF_PAD_LEFT_PX) / plotW) * dur;
-      const yToValue = (y) => (1 - (y - KF_PAD_TOP_PX) / plotH) * KF_VALUE_MAX;
-      return { dur, W, H, plotW, plotH, timeToX, valueToY, xToTime, yToValue };
+      const yToValue = (y) => (1 - (y - KF_PAD_TOP_PX) / plotH) * max;
+      return { dur, W, H, plotW, plotH, timeToX, valueToY, xToTime, yToValue, def };
     }
 
-    // Convert a screen pointer event into (time, value), clamped to legal ranges.
+    // Convert a screen pointer event into (time, value) for the active track,
+    // clamped to legal ranges.
     function timelineEventCoords(svg, ev) {
       const rect = svg.getBoundingClientRect();
       const px = ev.clientX - rect.left;
       const py = ev.clientY - rect.top;
       const m = timelinePixelMetrics(svg);
       const time = Math.max(0, Math.min(m.dur, m.xToTime(px)));
-      const value = Math.max(0, Math.min(KF_VALUE_MAX, m.yToValue(py)));
+      const value = Math.max(0, Math.min(m.def.max, m.yToValue(py)));
       return { time, value };
     }
 
@@ -1053,7 +1080,7 @@ export default function Page() {
       const svg = $('kfTimeline');
       if (!svg) return;
       const m = timelinePixelMetrics(svg);
-      const { dur, W, H, timeToX, valueToY } = m;
+      const { dur, W, H, timeToX, valueToY, def } = m;
       svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
       svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
 
@@ -1065,24 +1092,42 @@ export default function Page() {
         html += `<line class="kf-grid" x1="${x}" y1="${KF_PAD_TOP_PX}" x2="${x}" y2="${H - KF_PAD_BOTTOM_PX}" />`;
         html += `<text class="kf-axis-label" x="${x}" y="${H - 6}" text-anchor="middle">${s}s</text>`;
       }
-      // Horizontal value lines (0/30/60) + labels along the left gutter.
-      for (const v of [0, 30, 60]) {
+      // Horizontal value lines for the active track: 0, mid, max (in track
+      // units). Labels show the user-facing slider value, so e.g. spacing
+      // shows "-100 / 0 / 100" rather than "0 / 100 / 200".
+      const ticks = [0, def.max / 2, def.max];
+      for (const v of ticks) {
         const y = valueToY(v);
         html += `<line class="kf-grid" x1="${KF_PAD_LEFT_PX}" y1="${y}" x2="${W - KF_PAD_RIGHT_PX}" y2="${y}" />`;
-        html += `<text class="kf-axis-label" x="${KF_PAD_LEFT_PX - 6}" y="${y + 4}" text-anchor="end">${v}</text>`;
+        const display = def.format ? def.format(v) : `${v}`;
+        html += `<text class="kf-axis-label" x="${KF_PAD_LEFT_PX - 6}" y="${y + 4}" text-anchor="end">${display}</text>`;
       }
 
-      // Curve: polyline through all keyframes (sorted by time).
-      if (keyframes.length >= 2) {
-        const pts = keyframes.map((k) => `${timeToX(k.time)},${valueToY(k.value)}`).join(' ');
-        html += `<polyline class="kf-curve" points="${pts}" />`;
+      // Inactive tracks: faint curves so the user can see them but not edit.
+      for (const id of Object.keys(kfTracks)) {
+        if (id === kfActiveTrackId) continue;
+        const trackDef = KF_TRACK_BY_ID[id];
+        const arr = kfTracks[id];
+        if (!trackDef || arr.length < 2) continue;
+        // Map this track's value into the active track's pixel space so the
+        // curves visually line up across switches.
+        const ratio = trackDef.max > 0 ? def.max / trackDef.max : 1;
+        const pts = arr.map((k) => `${timeToX(k.time)},${valueToY(k.value * ratio)}`).join(' ');
+        html += `<polyline class="kf-curve kf-curve-inactive" stroke="${trackDef.color}" points="${pts}" />`;
       }
 
-      // Markers — drawn last so they sit on top.
-      for (let i = 0; i < keyframes.length; i++) {
-        const k = keyframes[i];
+      // Active track curve.
+      const active = activeTrack();
+      if (active.length >= 2) {
+        const pts = active.map((k) => `${timeToX(k.time)},${valueToY(k.value)}`).join(' ');
+        html += `<polyline class="kf-curve" stroke="${def.color}" points="${pts}" />`;
+      }
+
+      // Markers — only for the active track.
+      for (let i = 0; i < active.length; i++) {
+        const k = active[i];
         const cls = i === kfSelectedIndex ? 'kf-marker selected' : 'kf-marker';
-        html += `<circle class="${cls}" data-i="${i}" cx="${timeToX(k.time)}" cy="${valueToY(k.value)}" r="${KF_MARKER_R_PX}" />`;
+        html += `<circle class="${cls}" data-i="${i}" cx="${timeToX(k.time)}" cy="${valueToY(k.value)}" r="${KF_MARKER_R_PX}" fill="${def.color}" />`;
       }
 
       // Playhead.
@@ -1098,34 +1143,58 @@ export default function Page() {
       if (del) del.hidden = kfSelectedIndex < 0;
     }
 
-    function setKeyframes(next) {
-      keyframes = next;
-      sortKeyframes();
+    function renderKeyframeTrackChips() {
+      const host = $('kfTrackChips');
+      if (!host) return;
+      let html = '';
+      for (const def of KF_TRACK_DEFS) {
+        const count = (kfTracks[def.id] || []).length;
+        const cls = def.id === kfActiveTrackId ? 'kf-track-chip selected' : 'kf-track-chip';
+        html += `<button type="button" class="${cls}" data-track="${def.id}" style="--kf-chip-color:${def.color}">${def.label}<span class="kf-track-count">${count}</span></button>`;
+      }
+      host.innerHTML = html;
+    }
+
+    function setActiveTrack(id) {
+      if (!KF_TRACK_BY_ID[id] || id === kfActiveTrackId) return;
+      kfActiveTrackId = id;
+      kfSelectedIndex = -1;
+      renderKeyframeTrackChips();
       renderKeyframeTimeline();
       updateKeyframeStats();
     }
 
     function addKeyframeAtCurrent() {
-      const lastTime = keyframes.length ? keyframes[keyframes.length - 1].time : -1;
+      const def = activeTrackDef();
+      const arr = activeTrack();
+      const lastTime = arr.length ? arr[arr.length - 1].time : -1;
       const time = lastTime < 0 ? 0 : Math.round((lastTime + 1) * 100) / 100;
-      keyframes.push(clampKeyframe({ time, value: +$('inflate').value }, KF_VALUE_MAX));
-      sortKeyframes();
-      kfSelectedIndex = keyframes.length - 1;
+      const slider = $(def.id);
+      const trackVal = sliderToTrackValue(def.id, slider ? slider.value : 0);
+      arr.push(clampKeyframe({ time, value: trackVal }, def.max));
+      sortTrack(arr);
+      kfSelectedIndex = arr.findIndex((k) => k.time === time && k.value === trackVal);
+      renderKeyframeTrackChips();
       renderKeyframeTimeline();
       updateKeyframeStats();
     }
 
     function clearKeyframes() {
-      keyframes = [];
+      // Clear only the active track — Cmd-clearing one param shouldn't nuke
+      // the user's other animations.
+      kfTracks[kfActiveTrackId] = [];
       kfSelectedIndex = -1;
+      renderKeyframeTrackChips();
       renderKeyframeTimeline();
       updateKeyframeStats();
     }
 
     function deleteSelectedKeyframe() {
-      if (kfSelectedIndex < 0 || kfSelectedIndex >= keyframes.length) return;
-      keyframes.splice(kfSelectedIndex, 1);
+      const arr = activeTrack();
+      if (kfSelectedIndex < 0 || kfSelectedIndex >= arr.length) return;
+      arr.splice(kfSelectedIndex, 1);
       kfSelectedIndex = -1;
+      renderKeyframeTrackChips();
       renderKeyframeTimeline();
       updateKeyframeStats();
     }
@@ -1152,15 +1221,18 @@ export default function Page() {
             return;
           }
         }
-        // Empty-space click: add a keyframe at the cursor.
+        // Empty-space click: add a keyframe at the cursor on the active track.
+        const def = activeTrackDef();
+        const arr = kfTracks[kfActiveTrackId];
         const { time, value } = timelineEventCoords(svg, ev);
-        keyframes.push(clampKeyframe({ time, value }, KF_VALUE_MAX));
-        sortKeyframes();
-        kfSelectedIndex = keyframes.findIndex((k) => k.time === time && k.value === value);
+        arr.push(clampKeyframe({ time, value }, def.max));
+        sortTrack(arr);
+        kfSelectedIndex = arr.findIndex((k) => k.time === time && k.value === value);
         kfDraggingIndex = kfSelectedIndex;
         kfDidDrag = false;
         pointerId = ev.pointerId;
         try { svg.setPointerCapture(pointerId); } catch (_) {}
+        renderKeyframeTrackChips();
         renderKeyframeTimeline();
         updateKeyframeStats();
         ev.preventDefault();
@@ -1169,21 +1241,24 @@ export default function Page() {
         if (kfDraggingIndex < 0 || ev.pointerId !== pointerId) return;
         const { time, value } = timelineEventCoords(svg, ev);
         if (Math.abs(time - dragStartT) > 0.01 || Math.abs(value - dragStartV) > 0.5) kfDidDrag = true;
-        const k = keyframes[kfDraggingIndex];
+        const def = activeTrackDef();
+        const arr = kfTracks[kfActiveTrackId];
+        const k = arr[kfDraggingIndex];
         if (!k) return;
-        const next = clampKeyframe({ ...k, time, value }, KF_VALUE_MAX);
-        keyframes[kfDraggingIndex] = next;
+        const next = clampKeyframe({ ...k, time, value }, def.max);
+        arr[kfDraggingIndex] = next;
         renderKeyframeTimeline();
         updateKeyframeStats();
       };
       const onUp = (ev) => {
         if (ev.pointerId !== pointerId) return;
         // Re-sort (drag may have crossed a neighbor) and recover the selected
-        // index by identity.
+        // index by identity, on the active track.
         if (kfDraggingIndex >= 0) {
-          const dragged = keyframes[kfDraggingIndex];
-          sortKeyframes();
-          kfSelectedIndex = keyframes.indexOf(dragged);
+          const arr = kfTracks[kfActiveTrackId];
+          const dragged = arr[kfDraggingIndex];
+          sortTrack(arr);
+          kfSelectedIndex = arr.indexOf(dragged);
         }
         kfDraggingIndex = -1;
         try { svg.releasePointerCapture(pointerId); } catch (_) {}
@@ -1196,17 +1271,58 @@ export default function Page() {
       addListener(svg, 'pointercancel', onUp);
     }
 
+    // Convert an interpolateTracks() overlay (track-space values) into a
+    // submitJobAsync paramOverride (slider-space values) and a side-effect
+    // map for keeping the sliders in sync during preview.
+    function trackOverlayToSliderOverride(overlay) {
+      const override = {};
+      const sliders = {};
+      for (const id of Object.keys(overlay)) {
+        const sliderVal = trackValueToSlider(id, overlay[id]);
+        override[id] = sliderVal;
+        sliders[id] = sliderVal;
+      }
+      return { override, sliders };
+    }
+
+    function applyTrackPreviewSliders(sliders) {
+      for (const id of Object.keys(sliders)) {
+        const def = KF_TRACK_BY_ID[id];
+        const slider = $(id);
+        if (!slider) continue;
+        slider.value = sliders[id];
+        const out = $(`${id}Val`);
+        if (out && def && typeof def.format === 'function') {
+          // The format helper takes track-space values; we have slider-space
+          // here, so reverse the offset before formatting.
+          out.textContent = def.format(sliderToTrackValue(id, sliders[id]));
+        }
+      }
+    }
+
+    function snapshotSliders(ids) {
+      const out = {};
+      for (const id of ids) {
+        const slider = $(id);
+        out[id] = slider ? +slider.value : 0;
+      }
+      return out;
+    }
+
     let timelinePlayActive = false;
     let timelinePlayTimer = 0;
     let timelinePlayBusy = false;
     async function previewTimeline() {
       if (timelinePlayActive) return;
-      if (keyframes.length < 2) {
-        status('Add at least two keyframes to preview the timeline.');
+      const dur = tracksDuration(kfTracks);
+      if (dur <= 0) {
+        status('Add at least two keyframes on a track to preview the timeline.');
         return;
       }
-      const original = +$('inflate').value;
-      const dur = keyframeDuration(keyframes);
+      const ids = KF_TRACK_DEFS.map((d) => d.id);
+      const original = snapshotSliders(ids);
+      const baseTrack = {};
+      for (const id of ids) baseTrack[id] = sliderToTrackValue(id, original[id]);
       const frameMs = 1000 / 30;
       const startedAt = performance.now();
       timelinePlayActive = true;
@@ -1214,7 +1330,6 @@ export default function Page() {
       const tick = async () => {
         if (!timelinePlayActive) return;
         if (timelinePlayBusy) {
-          // The worker is still computing the previous tick — try again.
           timelinePlayTimer = setTimeout(tick, frameMs);
           return;
         }
@@ -1225,16 +1340,13 @@ export default function Page() {
           stopTimelinePreview(original);
           return;
         }
-        const v = interpolateKeyframes(keyframes, t, original);
+        const overlay = interpolateTracks(kfTracks, t, baseTrack);
+        const { override, sliders } = trackOverlayToSliderOverride(overlay);
         timelinePlayBusy = true;
         try {
-          const res = await submitJobAsync({ inflate: v });
+          const res = await submitJobAsync(override);
           if (!timelinePlayActive) return;
-          // Mirror submitJob's interactive side-effects: update slider readout
-          // and apply the worker result to the SVG.
-          $('inflate').value = v;
-          const out = $('inflateVal');
-          if (out) out.textContent = v.toFixed(0);
+          applyTrackPreviewSliders(sliders);
           lastRings = res.rings || [];
           applyToDOM(res.params, res);
         } finally {
@@ -1245,17 +1357,15 @@ export default function Page() {
       tick();
     }
 
-    function stopTimelinePreview(restoreValue) {
+    function stopTimelinePreview(restoreValues) {
       timelinePlayActive = false;
       kfPlayheadTime = -1;
       renderKeyframeTimeline();
       if (timelinePlayTimer) { clearTimeout(timelinePlayTimer); timelinePlayTimer = 0; }
       const btn = $('kfPlay');
       if (btn) btn.textContent = '▶ Preview';
-      if (restoreValue !== undefined) {
-        $('inflate').value = restoreValue;
-        const out = $('inflateVal');
-        if (out) out.textContent = (+restoreValue).toFixed(0);
+      if (restoreValues && typeof restoreValues === 'object') {
+        applyTrackPreviewSliders(restoreValues);
         render();
       }
     }
@@ -1309,14 +1419,13 @@ export default function Page() {
     }
 
     async function preRender2DFrames() {
-      const haveKeyframes = keyframes.length >= 2;
-      const baseInflate = +$('inflate').value;
-      let duration;
-      if (haveKeyframes) {
-        duration = keyframeDuration(keyframes) * (captureCycles || 1);
-      } else {
-        duration = 2; // static clip fallback
-      }
+      const baseDuration = tracksDuration(kfTracks);
+      const haveKeyframes = baseDuration > 0;
+      const ids = KF_TRACK_DEFS.map((d) => d.id);
+      const sliderBase = snapshotSliders(ids);
+      const trackBase = {};
+      for (const id of ids) trackBase[id] = sliderToTrackValue(id, sliderBase[id]);
+      const duration = haveKeyframes ? baseDuration * (captureCycles || 1) : 2;
       const fps = 30;
       const frameCount = Math.max(1, Math.ceil(duration * fps));
       const frames = [];
@@ -1327,9 +1436,12 @@ export default function Page() {
       for (let i = 0; i < frameCount; i++) {
         if (precomputeAborted) return null;
         const t = i / fps;
-        const inflate = haveKeyframes ? interpolateKeyframes(keyframes, t, baseInflate) : baseInflate;
+        // Wrap into the base clip's timebase when looping for cycles >1.
+        const tWrap = haveKeyframes ? (t % baseDuration) : 0;
+        const overlay = haveKeyframes ? interpolateTracks(kfTracks, tWrap, trackBase) : {};
+        const { override } = trackOverlayToSliderOverride(overlay);
         // eslint-disable-next-line no-await-in-loop
-        const res = await submitJobAsync({ inflate });
+        const res = await submitJobAsync(override);
         frames.push({ d: res.d, bbox: res.bbox, params: res.params });
         if (indicator) indicator.textContent = `Rendering ${i + 1}/${frameCount}`;
       }
@@ -1627,6 +1739,13 @@ export default function Page() {
       else previewTimeline();
     });
     setupTimelinePointer();
+    if ($('kfTrackChips')) {
+      addListener($('kfTrackChips'), 'click', (ev) => {
+        const btn = ev.target && ev.target.closest('[data-track]');
+        if (btn) setActiveTrack(btn.dataset.track);
+      });
+    }
+    renderKeyframeTrackChips();
     renderKeyframeTimeline();
     updateKeyframeStats();
     // Re-render on resize so markers/labels stay round under non-uniform aspect.
@@ -1921,6 +2040,7 @@ export default function Page() {
         <section id="kfPanel" className="kf-panel" aria-label="Animation keyframes">
           <div className="kf-panel-head">
             <strong>Animation keyframes (2D record)</strong>
+            <div id="kfTrackChips" className="kf-track-chips" role="tablist" aria-label="Animated parameter" />
             <span className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</span>
           </div>
           <div className="kf-panel-body">
@@ -1928,9 +2048,9 @@ export default function Page() {
             <div className="kf-panel-actions">
               <button id="kfAdd" type="button">+ Add at current</button>
               <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
-              <button id="kfClear" type="button" className="secondary">Clear</button>
+              <button id="kfClear" type="button" className="secondary">Clear track</button>
               <button id="kfDelete" type="button" className="secondary" hidden>Delete keyframe</button>
-              <span className="hint kf-panel-hint">Click to add · drag to move · Y = inflate (0–60), X = time</span>
+              <span className="hint kf-panel-hint">Pick a track above · click to add · drag to move · X = time</span>
             </div>
           </div>
         </section>

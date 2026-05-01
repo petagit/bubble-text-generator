@@ -67,6 +67,40 @@ main > #kfPanel { flex: 0 0 auto; }
 }
 .kf-panel-actions button { padding: 6px 10px; font-size: 12px; }
 .kf-panel-hint { font-size: 11px; color: #888; }
+.kf-track-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.kf-track-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #e5e5ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #444;
+  cursor: pointer;
+  position: relative;
+}
+.kf-track-chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--kf-chip-color, #999);
+}
+.kf-track-chip.selected {
+  border-color: var(--kf-chip-color, #0a84ff);
+  color: var(--kf-chip-color, #0a84ff);
+  background: rgba(10,132,255,0.08);
+}
+.kf-track-count {
+  font-size: 10px;
+  font-weight: 500;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+.kf-curve-inactive { stroke-opacity: 0.18; stroke-width: 1; }
 h1 { font-size: 18px; margin: 0 0 4px; }
 .sub { font-size: 12px; color: #666; margin-bottom: 8px; }
 label { font-size: 12px; font-weight: 600; color: #333; display: block; margin-bottom: 4px; }

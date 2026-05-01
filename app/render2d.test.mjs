@@ -6,11 +6,15 @@ import {
   applyMat2D,
   clampKeyframe,
   interpolateKeyframes,
+  interpolateTracks,
   invertMat2D,
   keyframeDuration,
   mat2DFor,
   svgTransformFor,
   timelineDuration,
+  tracksAreEmpty,
+  tracksDuration,
+  tracksKeyframeCount,
   unionViewBox,
 } from './render2d.mjs';
 
@@ -133,4 +137,40 @@ test('interpolateKeyframes uses the .value property (schema regression)', () => 
   const wrong = [{ time: 0, inflate: 10 }, { time: 1, inflate: 20 }];
   const result = interpolateKeyframes(wrong, 0.5);
   assert.ok(Number.isNaN(result), 'a non-.value schema should return NaN, exposing the bug');
+});
+
+test('tracksDuration is the max time across any track (≥2 keyframes total)', () => {
+  assert.equal(tracksDuration({}), 0);
+  assert.equal(tracksDuration({ inflate: [{ time: 5, value: 1 }] }), 0);
+  assert.equal(
+    tracksDuration({
+      inflate: [{ time: 0, value: 0 }, { time: 4, value: 1 }],
+      blur: [{ time: 0, value: 0 }, { time: 7, value: 5 }],
+    }),
+    7,
+  );
+});
+
+test('tracksAreEmpty / tracksKeyframeCount aggregate across tracks', () => {
+  assert.equal(tracksAreEmpty({}), true);
+  assert.equal(tracksAreEmpty({ inflate: [], blur: [] }), true);
+  assert.equal(tracksAreEmpty({ inflate: [{ time: 0, value: 0 }] }), false);
+  assert.equal(tracksKeyframeCount({ inflate: [{ time: 0, value: 0 }, { time: 1, value: 5 }], blur: [{ time: 2, value: 3 }] }), 3);
+});
+
+test('interpolateTracks builds a per-frame overlay only for animated tracks', () => {
+  const tracks = {
+    inflate: [{ time: 0, value: 0 }, { time: 1, value: 60 }],
+    blur: [{ time: 0, value: 1 }],          // single keyframe → constant
+    spacing: [],                            // empty → skipped
+  };
+  const overlay = interpolateTracks(tracks, 0.5, { inflate: 14, blur: 3, spacing: -30 });
+  assert.equal(overlay.inflate, 30);
+  assert.equal(overlay.blur, 1);
+  assert.equal('spacing' in overlay, false);
+});
+
+test('timelineDuration accepts a track map and reports the latest time', () => {
+  assert.equal(timelineDuration({ inflate: [{ time: 5, value: 0 }, { time: 7, value: 0 }] }, 4), 8);
+  assert.equal(timelineDuration({}, 4), 4);
 });

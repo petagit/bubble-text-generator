@@ -230,13 +230,74 @@ export function keyframeDuration(keyframes) {
   return max;
 }
 
+// Same idea as `keyframeDuration` but across a `{ trackId: [keyframe...] }`
+// map. Used for the multi-track timeline so a clip's length is the longest
+// span any animated parameter occupies.
+export function tracksDuration(tracks) {
+  if (!tracks || typeof tracks !== 'object') return 0;
+  let max = 0;
+  let count = 0;
+  for (const id of Object.keys(tracks)) {
+    const arr = tracks[id];
+    if (!Array.isArray(arr)) continue;
+    count += arr.length;
+    for (const k of arr) if (k && k.time > max) max = k.time;
+  }
+  // A duration of 0 only makes sense when there is real animation (≥2 frames
+  // somewhere). Otherwise the recorder uses its static-clip fallback.
+  return count >= 2 ? max : 0;
+}
+
+// True iff no track has any keyframes at all.
+export function tracksAreEmpty(tracks) {
+  if (!tracks || typeof tracks !== 'object') return true;
+  for (const id of Object.keys(tracks)) {
+    if (Array.isArray(tracks[id]) && tracks[id].length > 0) return false;
+  }
+  return true;
+}
+
+// Total keyframe count across all tracks.
+export function tracksKeyframeCount(tracks) {
+  if (!tracks || typeof tracks !== 'object') return 0;
+  let n = 0;
+  for (const id of Object.keys(tracks)) {
+    if (Array.isArray(tracks[id])) n += tracks[id].length;
+  }
+  return n;
+}
+
+// Build a per-frame parameter overlay by interpolating each track at time `t`.
+// Tracks with fewer than 2 keyframes are skipped (the slider's current value
+// wins). Returns an object suitable for `Object.assign(params, overlay)`.
+export function interpolateTracks(tracks, t, base = {}) {
+  const overlay = {};
+  if (!tracks || typeof tracks !== 'object') return overlay;
+  for (const id of Object.keys(tracks)) {
+    const kf = tracks[id];
+    if (!Array.isArray(kf) || kf.length === 0) continue;
+    if (kf.length === 1) { overlay[id] = +kf[0].value; continue; }
+    const fallback = (base && id in base) ? +base[id] : +kf[0].value;
+    overlay[id] = interpolateKeyframes(kf, t, fallback);
+  }
+  return overlay;
+}
+
 // Visible track duration: at least `minSeconds`, otherwise one second past the
 // last keyframe. Used so the timeline always has some empty space at the end
-// for the user to grab when adding a new keyframe.
-export function timelineDuration(keyframes, minSeconds = 4) {
-  const lastTime = (Array.isArray(keyframes) && keyframes.length)
-    ? keyframes.reduce((m, k) => (k.time > m ? k.time : m), 0)
-    : 0;
+// for the user to grab when adding a new keyframe. Accepts either a single
+// keyframe array or a `{ trackId: [...] }` track map.
+export function timelineDuration(keyframesOrTracks, minSeconds = 4) {
+  let lastTime = 0;
+  if (Array.isArray(keyframesOrTracks)) {
+    for (const k of keyframesOrTracks) if (k && k.time > lastTime) lastTime = k.time;
+  } else if (keyframesOrTracks && typeof keyframesOrTracks === 'object') {
+    for (const id of Object.keys(keyframesOrTracks)) {
+      const arr = keyframesOrTracks[id];
+      if (!Array.isArray(arr)) continue;
+      for (const k of arr) if (k && k.time > lastTime) lastTime = k.time;
+    }
+  }
   return Math.max(minSeconds, lastTime + 1);
 }
 
