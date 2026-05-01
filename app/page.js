@@ -977,94 +977,85 @@ export default function Page() {
       }
     }
 
-    // Timeline geometry constants. The SVG uses a normalized viewBox where
-    // x = time-seconds and y = (60 - value), so y=0 is the top (max inflate)
-    // and y=60 is the bottom. The whole control auto-scales to its CSS box.
+    // Timeline geometry. Everything is computed in CSS pixels and the SVG
+    // uses a 1:1 viewBox (preserveAspectRatio="xMinYMin meet") so circles,
+    // strokes, and text all render at their natural pixel size regardless
+    // of the panel's width or height.
     const KF_VALUE_MAX = 60;
-    const KF_PAD_LEFT = 0.15;   // seconds — left margin so 0s isn't on the edge
-    const KF_PAD_RIGHT = 0.15;
-    const KF_PAD_TOP = 4;       // value units
-    const KF_PAD_BOTTOM = 6;
+    const KF_PAD_LEFT_PX = 32;     // room for "60" / "30" / "0" labels
+    const KF_PAD_RIGHT_PX = 12;
+    const KF_PAD_TOP_PX = 10;
+    const KF_PAD_BOTTOM_PX = 22;   // room for "0s 1s 2s …" labels
+    const KF_MARKER_R_PX = 6;
     let kfSelectedIndex = -1;
     let kfDraggingIndex = -1;
     let kfDidDrag = false;
     let kfPlayheadTime = -1;
 
-    function timelineViewBox() {
+    function timelinePixelMetrics(svg) {
       const dur = timelineDuration(keyframes, 4);
-      // Pad both axes so markers at the extremes aren't half-clipped.
-      const w = dur + KF_PAD_LEFT + KF_PAD_RIGHT;
-      const h = KF_VALUE_MAX + KF_PAD_TOP + KF_PAD_BOTTOM;
-      return { dur, w, h, minX: -KF_PAD_LEFT, minY: -KF_PAD_TOP };
+      const W = Math.max(80, svg.clientWidth || 280);
+      const H = Math.max(60, svg.clientHeight || 140);
+      const plotW = Math.max(1, W - KF_PAD_LEFT_PX - KF_PAD_RIGHT_PX);
+      const plotH = Math.max(1, H - KF_PAD_TOP_PX - KF_PAD_BOTTOM_PX);
+      const timeToX = (t) => KF_PAD_LEFT_PX + (t / dur) * plotW;
+      const valueToY = (v) => KF_PAD_TOP_PX + (1 - v / KF_VALUE_MAX) * plotH;
+      const xToTime = (x) => ((x - KF_PAD_LEFT_PX) / plotW) * dur;
+      const yToValue = (y) => (1 - (y - KF_PAD_TOP_PX) / plotH) * KF_VALUE_MAX;
+      return { dur, W, H, plotW, plotH, timeToX, valueToY, xToTime, yToValue };
     }
 
-    // Convert a screen pointer event into (time, value) within the timeline
-    // SVG's user space, clamped to legal ranges.
+    // Convert a screen pointer event into (time, value), clamped to legal ranges.
     function timelineEventCoords(svg, ev) {
-      const pt = svg.createSVGPoint();
-      pt.x = ev.clientX; pt.y = ev.clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return { time: 0, value: 0 };
-      const u = pt.matrixTransform(ctm.inverse());
-      const time = Math.max(0, u.x);
-      const value = Math.max(0, Math.min(KF_VALUE_MAX, KF_VALUE_MAX - u.y));
+      const rect = svg.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const m = timelinePixelMetrics(svg);
+      const time = Math.max(0, Math.min(m.dur, m.xToTime(px)));
+      const value = Math.max(0, Math.min(KF_VALUE_MAX, m.yToValue(py)));
       return { time, value };
     }
 
     function renderKeyframeTimeline() {
       const svg = $('kfTimeline');
       if (!svg) return;
-      const { dur, w, h, minX, minY } = timelineViewBox();
-      svg.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
-      svg.setAttribute('preserveAspectRatio', 'none');
-
-      // The SVG uses preserveAspectRatio="none" so x and y scale independently.
-      // We need pixel→user scales to keep markers round and labels readable.
-      const pxW = svg.clientWidth || 280;
-      const pxH = svg.clientHeight || 140;
-      const sx = w / pxW;   // user units per pixel, x
-      const sy = h / pxH;   // user units per pixel, y
-      const MARKER_PX = 6;
-      const FONT_PX = 10;
-      const rx = MARKER_PX * sx;
-      const ry = MARKER_PX * sy;
-      const fontX = FONT_PX * sx;
-      const fontY = FONT_PX * sy;
+      const m = timelinePixelMetrics(svg);
+      const { dur, W, H, timeToX, valueToY } = m;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
 
       let html = '';
 
-      // Grid: vertical second markers, horizontal value lines (0/30/60).
+      // Grid: vertical second markers + tick labels along the bottom.
       for (let s = 0; s <= Math.floor(dur); s++) {
-        html += `<line class="kf-grid" x1="${s}" y1="0" x2="${s}" y2="${KF_VALUE_MAX}" />`;
-        html += `<text class="kf-axis-label" x="${s}" y="${KF_VALUE_MAX + KF_PAD_BOTTOM - fontY * 0.3}" text-anchor="middle" font-size="${fontY}">${s}s</text>`;
+        const x = timeToX(s);
+        html += `<line class="kf-grid" x1="${x}" y1="${KF_PAD_TOP_PX}" x2="${x}" y2="${H - KF_PAD_BOTTOM_PX}" />`;
+        html += `<text class="kf-axis-label" x="${x}" y="${H - 6}" text-anchor="middle">${s}s</text>`;
       }
+      // Horizontal value lines (0/30/60) + labels along the left gutter.
       for (const v of [0, 30, 60]) {
-        const y = KF_VALUE_MAX - v;
-        html += `<line class="kf-grid" x1="0" y1="${y}" x2="${dur}" y2="${y}" />`;
-        html += `<text class="kf-axis-label" x="${-KF_PAD_LEFT + fontX * 0.1}" y="${y + fontY * 0.35}" text-anchor="start" font-size="${fontY}">${v}</text>`;
+        const y = valueToY(v);
+        html += `<line class="kf-grid" x1="${KF_PAD_LEFT_PX}" y1="${y}" x2="${W - KF_PAD_RIGHT_PX}" y2="${y}" />`;
+        html += `<text class="kf-axis-label" x="${KF_PAD_LEFT_PX - 6}" y="${y + 4}" text-anchor="end">${v}</text>`;
       }
 
       // Curve: polyline through all keyframes (sorted by time).
       if (keyframes.length >= 2) {
-        const pts = keyframes
-          .map((k) => `${k.time},${KF_VALUE_MAX - k.value}`)
-          .join(' ');
+        const pts = keyframes.map((k) => `${timeToX(k.time)},${valueToY(k.value)}`).join(' ');
         html += `<polyline class="kf-curve" points="${pts}" />`;
       }
 
-      // Markers — ellipses sized in pixel space so they stay round under
-      // non-uniform aspect scaling.
+      // Markers — drawn last so they sit on top.
       for (let i = 0; i < keyframes.length; i++) {
         const k = keyframes[i];
-        const cx = k.time;
-        const cy = KF_VALUE_MAX - k.value;
         const cls = i === kfSelectedIndex ? 'kf-marker selected' : 'kf-marker';
-        html += `<ellipse class="${cls}" data-i="${i}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" />`;
+        html += `<circle class="${cls}" data-i="${i}" cx="${timeToX(k.time)}" cy="${valueToY(k.value)}" r="${KF_MARKER_R_PX}" />`;
       }
 
       // Playhead.
       if (kfPlayheadTime >= 0) {
-        html += `<line class="kf-playhead" x1="${kfPlayheadTime}" y1="0" x2="${kfPlayheadTime}" y2="${KF_VALUE_MAX}" />`;
+        const x = timeToX(kfPlayheadTime);
+        html += `<line class="kf-playhead" x1="${x}" y1="${KF_PAD_TOP_PX}" x2="${x}" y2="${H - KF_PAD_BOTTOM_PX}" />`;
       }
 
       svg.innerHTML = html;

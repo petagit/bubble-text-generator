@@ -56,7 +56,7 @@ main > #kfPanel { flex: 0 0 auto; }
   gap: 12px;
   align-items: stretch;
 }
-.kf-panel-body .kf-timeline { height: 110px; }
+.kf-panel-body .kf-timeline { height: 130px; }
 .kf-panel-actions {
   display: flex;
   flex-direction: column;
@@ -105,13 +105,12 @@ button.secondary { background: #e5e5ea; color: #111; }
   touch-action: none;
   overflow: visible;
 }
-.kf-grid { stroke: #e5e5ea; stroke-width: 0.05; vector-effect: non-scaling-stroke; }
+.kf-grid { stroke: #e5e5ea; stroke-width: 1; }
 .kf-curve {
   fill: none;
   stroke: #0a84ff;
   stroke-width: 1.5;
   stroke-opacity: 0.55;
-  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 .kf-marker {
@@ -119,12 +118,12 @@ button.secondary { background: #e5e5ea; color: #111; }
   stroke: #fff;
   stroke-width: 1;
   cursor: grab;
-  vector-effect: non-scaling-stroke;
 }
 .kf-marker.selected { stroke: #00d4ff; stroke-width: 2; }
 .kf-marker:hover { fill: #339cff; }
 .kf-axis-label {
   fill: #999;
+  font-size: 11px;
   font-family: -apple-system, sans-serif;
   pointer-events: none;
   user-select: none;
@@ -132,7 +131,6 @@ button.secondary { background: #e5e5ea; color: #111; }
 .kf-playhead {
   stroke: #ff2d55;
   stroke-width: 2;
-  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 #stage {
