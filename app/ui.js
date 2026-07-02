@@ -1,0 +1,317 @@
+import { HDR_PRESETS, MATERIAL_PRESETS } from './rendering.mjs';
+import { ASPECT_OPTIONS, RESOLUTION_OPTIONS, VIDEO_FORMATS } from './capture.mjs';
+
+// Static markup only — every element is wired up by id in main.mjs.
+export function AppMarkup() {
+  return (
+    <>
+      <aside>
+        <div>
+          <h1>Bubble Text Generator</h1>
+          <div className="sub">Procedural inflate of any font</div>
+        </div>
+
+        <div>
+          <label htmlFor="text">Text</label>
+          <input id="text" type="text" defaultValue="POPCAM" autoComplete="off" />
+        </div>
+
+        <div>
+          <label htmlFor="font">Font (.ttf / .otf)</label>
+          <input id="font" type="file" accept=".ttf,.otf,.woff" />
+          <div className="hint">Or pick a built-in heavy font below.</div>
+        </div>
+
+        <div>
+          <label htmlFor="builtin">Built-in font</label>
+          <select id="builtin" defaultValue="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">Bagel Fat One (very puffy)</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/apache/luckiestguy/LuckiestGuy-Regular.ttf">Luckiest Guy</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/sniglet/Sniglet-Regular.ttf">Sniglet</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bungee/Bungee-Regular.ttf">Bungee</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bowlbyonesc/BowlbyOneSC-Regular.ttf">Bowlby One SC</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/passionone/PassionOne-Black.ttf">Passion One Black</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/changaone/ChangaOne-Regular.ttf">Changa One</option>
+            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf">Orbitron</option>
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="svgFile">Or upload an SVG</label>
+          <input id="svgFile" type="file" accept=".svg,image/svg+xml" />
+          <div className="svg-row">
+            <span id="svgFileName" className="hint" />
+            <button id="svgClear" type="button" className="secondary svg-clear">Clear SVG</button>
+          </div>
+          <div className="hint">Replaces the text input. Filled shapes (paths, rects, circles…) get inflated and rendered through the same 2D / 3D pipeline.</div>
+        </div>
+
+        <hr />
+
+        <div>
+          <div className="row"><label htmlFor="inflate">Inflate</label><span className="val" id="inflateVal">14</span></div>
+          <input id="inflate" type="range" min="0" max="60" defaultValue="14" />
+        </div>
+
+        <div>
+          <div className="row"><label htmlFor="blur">Bubble blend</label><span className="val" id="blurVal">3</span></div>
+          <input id="blur" type="range" min="0" max="20" defaultValue="3" />
+          <div className="hint">Higher = letters merge into a softer single blob.</div>
+        </div>
+
+        <div>
+          <div className="row"><label htmlFor="spacing">Letter spacing</label><span className="val" id="spacingVal">-30</span></div>
+          <input id="spacing" type="range" min="-100" max="100" defaultValue="-30" />
+        </div>
+
+        <div>
+          <label className="checkbox"><input id="merge" type="checkbox" defaultChecked /> Soft-blend touching letters</label>
+        </div>
+
+        <hr />
+
+        <details open>
+          <summary>3D balloon</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+            <label className="checkbox"><input id="mode3d" type="checkbox" /> 3D mode (drag to rotate, scroll to zoom)</label>
+            <div>
+              <div className="row"><label htmlFor="thickness">Thickness</label><span className="val" id="thicknessVal">0.55</span></div>
+              <input id="thickness" type="range" min="0.1" max="1.5" step="0.05" defaultValue="0.55" />
+            </div>
+            <div>
+              <div className="row"><label htmlFor="meshDensity">Mesh density</label><span className="val" id="meshDensityVal">14</span></div>
+              <input id="meshDensity" type="range" min="6" max="28" step="1" defaultValue="14" />
+              <div className="hint">Smaller triangles = smoother surface, slower.</div>
+            </div>
+            <div>
+              <div className="row"><label htmlFor="glossy">Gloss</label><span className="val" id="glossyVal">0.85</span></div>
+              <input id="glossy" type="range" min="0" max="1" step="0.05" defaultValue="0.85" />
+            </div>
+            <div>
+              <label className="checkbox"><input id="autoRotate" type="checkbox" /> Auto rotate</label>
+            </div>
+            <div>
+              <div className="row"><label htmlFor="rotateSpeed">Rotation speed</label><span className="val" id="rotateSpeedVal">0.8</span></div>
+              <input id="rotateSpeed" type="range" min="0.1" max="3" step="0.1" defaultValue="0.8" />
+            </div>
+            <div>
+              <label>Material</label>
+              <div className="material-grid">
+                {MATERIAL_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="material-chip"
+                    data-material-id={preset.id}
+                    aria-pressed={preset.id === MATERIAL_PRESETS[0].id ? 'true' : 'false'}
+                    title={preset.name}
+                  >
+                    <span className="material-swatch" style={{ background: preset.fill }} />
+                    <span>{preset.name}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="hint">Mirror + Chrome reflect the HDR environment below.</div>
+            </div>
+            <div>
+              <label>Environment (HDR)</label>
+              <div className="hdr-grid">
+                {HDR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="hdr-chip"
+                    data-hdr-id={preset.id}
+                    aria-pressed={preset.id === HDR_PRESETS[0].id ? 'true' : 'false'}
+                    title={preset.hint || preset.name}
+                  >
+                    <span className="hdr-swatch" style={{ background: preset.swatch }} />
+                    <span>{preset.name}</span>
+                  </button>
+                ))}
+              </div>
+              <label className="checkbox" style={{ marginTop: 8 }}>
+                <input id="showEnv" type="checkbox" /> Show environment as background
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>Style</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+            <div>
+              <label htmlFor="fill">Fill</label>
+              <input id="fill" type="color" defaultValue="#ff2d55" />
+            </div>
+            <label className="checkbox"><input id="threeD" type="checkbox" defaultChecked /> 2D shading (highlight + shadow)</label>
+            <label className="checkbox"><input id="outline" type="checkbox" /> White outline</label>
+            <div>
+              <div className="row"><label htmlFor="outlineW">Outline width</label><span className="val" id="outlineWVal">8</span></div>
+              <input id="outlineW" type="range" min="0" max="30" defaultValue="8" />
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>Quality</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+            <div>
+              <div className="row"><label htmlFor="quality">Resolution</label><span className="val" id="qualityVal">1.5</span></div>
+              <input id="quality" type="range" min="0.5" max="3" step="0.1" defaultValue="1.5" />
+            </div>
+            <label className="checkbox"><input id="liveDrag" type="checkbox" defaultChecked /> Lower quality while dragging</label>
+          </div>
+        </details>
+
+        <div className="btn-row">
+          <button id="dlSvg">Download SVG</button>
+          <button id="dlPng" className="secondary">Download PNG</button>
+        </div>
+        <div className="hint" id="status">Loading default font…</div>
+      </aside>
+      <main>
+        <div id="stage">
+          <svg className="preview" id="preview" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+            <defs id="svgDefs"></defs>
+            <g id="viewGroup">
+              <path id="mainPath" />
+              <path id="outlinePath" fill="none" stroke="#fff" strokeLinejoin="round" strokeLinecap="round" />
+              <path id="hiPath" />
+            </g>
+          </svg>
+          <canvas id="three"></canvas>
+          <canvas id="record2d" hidden width="1920" height="1920"></canvas>
+          <button id="resetView2D" type="button" className="reset-view" aria-label="Reset 2D view">Reset view</button>
+          <div className="spinner" id="spin"></div>
+        </div>
+        <div id="captureBar" className="capture-bar" aria-label="Capture controls">
+          <div id="cycleChips" className="cycle-pill" hidden>
+            {[1, 2, 3].map((n) => (
+              <button key={n} type="button" className="cycle-chip" data-cycle={n} title={`Repeat ${n}× (rotation cycles in 3D, keyframe loops in 2D)`}>
+                <span aria-hidden="true">↻</span>{n}x
+              </button>
+            ))}
+          </div>
+          <button id="shutter" type="button" className="shutter" aria-label="Take photo">
+            <span className="shutter-ring" />
+            <span className="shutter-dot" />
+          </button>
+          <div className="capture-pill">
+            <button type="button" className="cap-tab" data-capture-mode="image">Image</button>
+            <button type="button" className="cap-tab" data-capture-mode="video">Video</button>
+            <span className="cap-divider" />
+            {ASPECT_OPTIONS.map((opt) => (
+              <button key={opt.value} type="button" className="aspect-chip" data-aspect-id={opt.value}>{opt.label}</button>
+            ))}
+          </div>
+          <div className="capture-hint">Photo + video work in both 2D and 3D modes.</div>
+        </div>
+        <section id="kfPanel" className="kf-panel" aria-label="Animation keyframes">
+          <div className="kf-panel-head">
+            <strong>Animation keyframes (2D record)</strong>
+            <div id="kfTrackChips" className="kf-track-chips" role="tablist" aria-label="Animated parameter" />
+            <span className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</span>
+          </div>
+          <div className="kf-panel-body">
+            <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
+            <div className="kf-panel-actions">
+              <button id="kfAdd" type="button">+ Add at current</button>
+              <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
+              <button id="kfClear" type="button" className="secondary">Clear track</button>
+              <button id="kfDelete" type="button" className="secondary" hidden>Delete keyframe</button>
+              <span className="hint kf-panel-hint">Pick a track above · click to add · drag to move · X = time</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div id="recIndicator" className="rec-indicator" aria-live="polite">
+        <span className="rec-dot" />
+        <span id="recElapsed" className="rec-elapsed">0.0s</span>
+        <button id="recStop" type="button" className="rec-stop">
+          <span className="rec-stop-square" /> Stop
+        </button>
+      </div>
+
+      <div id="imageModal" className="modal" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle">
+        <div className="modal-backdrop" data-modal-close />
+        <div className="modal-card">
+          <div className="modal-header">
+            <div id="imageModalTitle" className="modal-title">Photo preview</div>
+            <button type="button" className="modal-close" data-modal-close aria-label="Close">×</button>
+          </div>
+          <div className="modal-image checker">
+            <img id="imagePreview" alt="Captured 3D bubble text" />
+          </div>
+          <div className="modal-controls">
+            <label className="modal-field">
+              <span>Resolution</span>
+              <select id="imageRes" defaultValue="1920">
+                {RESOLUTION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="modal-field checkbox">
+              <input id="imageBg" type="checkbox" defaultChecked /> Include background
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button id="imageDiscard" type="button" className="secondary">Discard</button>
+            <button id="imageDownload" type="button">Download PNG</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="videoModal" className="modal" role="dialog" aria-modal="true" aria-labelledby="videoModalTitle">
+        <div className="modal-backdrop" data-modal-close />
+        <div className="modal-card">
+          <div className="modal-header">
+            <div id="videoModalTitle" className="modal-title">Video preview</div>
+            <button type="button" className="modal-close" data-modal-close aria-label="Close">×</button>
+          </div>
+          <div className="modal-video">
+            <video id="videoPreview" controls loop muted playsInline />
+          </div>
+          <div id="videoReadyBanner" className="modal-banner" role="status">
+            ✓ Recording ready — pick a format below, then tap <strong>Download</strong> to save.
+          </div>
+          <div className="modal-controls">
+            <label className="modal-field">
+              <span>Resolution</span>
+              <select id="videoRes" defaultValue="1920">
+                {RESOLUTION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Quality</span>
+              <select id="videoQuality" defaultValue="high">
+                <option value="low">Low</option>
+                <option value="mid">Mid</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <label className="modal-field">
+              <span>Format</span>
+              <select id="videoFormat" defaultValue="mp4">
+                {VIDEO_FORMATS.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button id="videoDiscard" type="button" className="secondary">Discard</button>
+            <button id="videoDownload" type="button" className="progress-btn">
+              <span id="videoDownloadProgress" className="progress-fill" />
+              <span id="videoDownloadLabel" className="progress-label">Download</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
