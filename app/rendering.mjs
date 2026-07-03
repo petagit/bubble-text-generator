@@ -246,7 +246,12 @@ export function fitCameraToBox(camera, controls, box) {
   const fitDist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360));
   const cameraDistance = fitDist * 1.6;
 
-  camera.position.set(center.x, center.y, center.z + cameraDistance);
+  // Preserve the user's current orbit direction — refitting happens on every
+  // geometry rebuild (slider drags, typing), and snapping back to the front
+  // view each time would throw away the orbit the user just set up.
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1); else dir.normalize();
+  camera.position.copy(center).addScaledVector(dir, cameraDistance);
   camera.near = Math.max(1, cameraDistance - maxDim * 1.5);
   camera.far = cameraDistance + maxDim * 2.5;
   camera.updateProjectionMatrix();

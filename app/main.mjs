@@ -107,21 +107,22 @@ export function initApp() {
       fitCameraToBox(camera, controls, box);
     }
 
+    let needsRender = true;
     function resize() {
       const w = canvas.clientWidth || 600;
       const h = canvas.clientHeight || 400;
-      if (renderer.domElement.width !== w || renderer.domElement.height !== h) {
-        renderer.setSize(w, h, false);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-      }
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      // setSize clears the drawing buffer; without this the canvas stays
+      // blank after a resize until the next interaction.
+      needsRender = true;
     }
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
     resize();
 
     let alive = true;
-    let needsRender = true;
     let lastFrameTime = performance.now();
     let recordingActive = false;
     const onControlsChange = () => { needsRender = true; };
@@ -160,9 +161,13 @@ export function initApp() {
     function update3D(rings, params) {
       applyMaterialFromParams(params);
       const result = buildBalloonMeshFromRings(rings, params);
+      // Keep the spin phase across rebuilds so slider drags during auto-rotate
+      // don't snap the balloon back to its initial orientation.
+      const prevRotationY = currentMesh ? currentMesh.rotation.y : 0;
       disposeMesh();
       if (!result) { needsRender = true; return; }
       currentMesh = new THREE.Mesh(result.geom, material);
+      currentMesh.rotation.y = prevRotationY;
       scene.add(currentMesh);
       fitCamera(result.bbox);
       needsRender = true;
@@ -209,6 +214,7 @@ export function initApp() {
       needsRender = true;
     }
 
+    const hdrLoading = new Set();
     async function selectHdrPreset(id) {
       const preset = getHdrPreset(id);
       currentHdrId = preset.id;
@@ -220,6 +226,10 @@ export function initApp() {
         return;
       }
       if (preset.type !== 'hdr' || !preset.url) return;
+      // Re-clicking a preset that is still downloading must not kick off a
+      // second load — the loser's PMREM render target would leak.
+      if (hdrLoading.has(preset.id)) return;
+      hdrLoading.add(preset.id);
 
       const btn = document.querySelector(`[data-hdr-id="${preset.id}"]`);
       btn?.classList.add('loading');
@@ -227,12 +237,14 @@ export function initApp() {
       status(`Loading ${preset.name} HDR…`);
       try {
         const entry = await loadHdrEnvironment(preset.url, pmrem);
+        if (!alive) { disposeEnvEntry(entry); return; }
         envCache.set(preset.id, entry);
         if (currentHdrId === preset.id) applyEnvironment(entry);
         status(prevStatus || 'Ready.');
       } catch (err) {
         status(`HDR load failed: ${err.message}`);
       } finally {
+        hdrLoading.delete(preset.id);
         btn?.classList.remove('loading');
       }
     }
@@ -1004,9 +1016,9 @@ export function initApp() {
     function downloadPng() {
       const p = readParams();
       if (p.mode3d) {
-        const dataURL = $('three').toDataURL('image/png');
-        const a = document.createElement('a');
-        a.href = dataURL; a.download = 'bubble-text-3d.png'; a.click();
+        // Reading the WebGL canvas directly would need preserveDrawingBuffer;
+        // the capture path re-renders synchronously before reading instead.
+        downloadImageHiRes();
         return;
       }
       const svg = $('preview');
@@ -1170,6 +1182,12 @@ export function initApp() {
         html += `<button type="button" class="${cls}" data-track="${def.id}" style="--kf-chip-color:${def.color}">${def.label}<span class="kf-track-count">${count}</span></button>`;
       }
       host.innerHTML = html;
+      // Mirror track state onto the per-slider diamonds in the sidebar.
+      for (const btn of document.querySelectorAll('[data-kf-add]')) {
+        const id = btn.dataset.kfAdd;
+        btn.classList.toggle('has-kf', (kfTracks[id] || []).length > 0);
+        btn.classList.toggle('active-track', id === kfActiveTrackId);
+      }
     }
 
     function setActiveTrack(id) {
@@ -1649,6 +1667,9 @@ export function initApp() {
       addListener(btn, 'click', () => { selectHdrPreset(btn.dataset.hdrId); });
     }
     updateHdrButtons();
+    // Sync the body class with the checkbox's initial state (3D is the
+    // default) — the change listener below only covers later toggles.
+    document.body.classList.toggle('mode3d-on', $('mode3d').checked);
     applyControlAvailability();
     setupCamera2D();
 
@@ -1751,6 +1772,16 @@ export function initApp() {
       else previewTimeline();
     });
     setupTimelinePointer();
+    // CapCut-style diamonds next to each animatable slider: select that
+    // parameter's track and drop a keyframe at the slider's current value.
+    for (const btn of document.querySelectorAll('[data-kf-add]')) {
+      const def = KF_TRACK_BY_ID[btn.dataset.kfAdd];
+      if (def) btn.style.setProperty('--kf-color', def.color);
+      addListener(btn, 'click', () => {
+        setActiveTrack(btn.dataset.kfAdd);
+        addKeyframeAtCurrent();
+      });
+    }
     if ($('kfTrackChips')) {
       addListener($('kfTrackChips'), 'click', (ev) => {
         const btn = ev.target && ev.target.closest('[data-track]');

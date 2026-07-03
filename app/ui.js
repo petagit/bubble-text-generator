@@ -49,18 +49,18 @@ export function AppMarkup() {
         <hr />
 
         <div>
-          <div className="row"><label htmlFor="inflate">Inflate</label><span className="val" id="inflateVal">14</span></div>
+          <div className="row"><label htmlFor="inflate">Inflate</label><button type="button" className="kf-diamond" data-kf-add="inflate" title="Add Inflate keyframe" aria-label="Add Inflate keyframe">◆</button><span className="val" id="inflateVal">14</span></div>
           <input id="inflate" type="range" min="0" max="60" defaultValue="14" />
         </div>
 
         <div>
-          <div className="row"><label htmlFor="blur">Bubble blend</label><span className="val" id="blurVal">3</span></div>
+          <div className="row"><label htmlFor="blur">Bubble blend</label><button type="button" className="kf-diamond" data-kf-add="blur" title="Add Bubble blend keyframe" aria-label="Add Bubble blend keyframe">◆</button><span className="val" id="blurVal">3</span></div>
           <input id="blur" type="range" min="0" max="20" defaultValue="3" />
           <div className="hint">Higher = letters merge into a softer single blob.</div>
         </div>
 
         <div>
-          <div className="row"><label htmlFor="spacing">Letter spacing</label><span className="val" id="spacingVal">-30</span></div>
+          <div className="row"><label htmlFor="spacing">Letter spacing</label><button type="button" className="kf-diamond" data-kf-add="spacing" title="Add Letter spacing keyframe" aria-label="Add Letter spacing keyframe">◆</button><span className="val" id="spacingVal">-30</span></div>
           <input id="spacing" type="range" min="-100" max="100" defaultValue="-30" />
         </div>
 
@@ -73,7 +73,7 @@ export function AppMarkup() {
         <details open>
           <summary>3D balloon</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-            <label className="checkbox"><input id="mode3d" type="checkbox" /> 3D mode (drag to rotate, scroll to zoom)</label>
+            <label className="checkbox"><input id="mode3d" type="checkbox" defaultChecked /> 3D mode (drag to rotate, scroll to zoom)</label>
             <div>
               <div className="row"><label htmlFor="thickness">Thickness</label><span className="val" id="thicknessVal">0.55</span></div>
               <input id="thickness" type="range" min="0.1" max="1.5" step="0.05" defaultValue="0.55" />
