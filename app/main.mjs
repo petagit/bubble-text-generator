@@ -286,12 +286,12 @@ export function initApp() {
     let lastVideoUrl = null;
 
     // Solid backdrop used when "Include background" is on. Matches the top
-    // color of the canvas CSS gradient so the export looks WYSIWYG.
-    const captureBgColor = new THREE.Color(0xeef1f6);
-    const captureBgColorDark = new THREE.Color(0x1f2228);
+    // color of the canvas CSS gradient so the export looks WYSIWYG. The app
+    // theme is dark-only, so there is a single backdrop color.
+    const CAPTURE_BG_CSS = '#1f2228';
+    const captureBgColor = new THREE.Color(CAPTURE_BG_CSS);
     function currentCaptureBackgroundColor() {
-      const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      return dark ? captureBgColorDark : captureBgColor;
+      return captureBgColor;
     }
 
     function setCaptureMode(mode) {
@@ -336,9 +336,7 @@ export function initApp() {
       const cv = document.createElement('canvas');
       cv.width = W;
       cv.height = H;
-      const bg = captureWithBackground
-        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#1f2228' : '#eef1f6')
-        : null;
+      const bg = captureWithBackground ? CAPTURE_BG_CSS : null;
       renderToCanvas(cv, lastGeom, readParams(), view2D, vb, { background: bg });
       return { dataUrl: cv.toDataURL('image/png'), width: W, height: H };
     }
@@ -1533,9 +1531,7 @@ export function initApp() {
       recordCanvas.height = Math.max(2, Math.round(targetW / aspect));
 
       // Background color (mirrors the photo path's WYSIWYG behaviour).
-      const bgColor = captureWithBackground
-        ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#1f2228' : '#eef1f6')
-        : null;
+      const bgColor = captureWithBackground ? CAPTURE_BG_CSS : null;
 
       // Paint the first frame so MediaRecorder's first sample isn't blank.
       renderToCanvas(recordCanvas, frames[0], frames[0].params, view2D, frozenViewBox, { background: bgColor });
@@ -1679,8 +1675,27 @@ export function initApp() {
       if (entry) applyEnvironment(entry);
     });
 
+    // The 2D/3D segmented control in the topbar drives the hidden mode3d
+    // checkbox so all existing checkbox-based wiring keeps working.
+    function updateModeButtons() {
+      const on = $('mode3d').checked;
+      for (const btn of document.querySelectorAll('[data-mode-set]')) {
+        btn.classList.toggle('selected', (btn.dataset.modeSet === '3d') === on);
+      }
+    }
+    for (const btn of document.querySelectorAll('[data-mode-set]')) {
+      addListener(btn, 'click', () => {
+        const want = btn.dataset.modeSet === '3d';
+        if ($('mode3d').checked === want) return;
+        $('mode3d').checked = want;
+        $('mode3d').dispatchEvent(new Event('change'));
+      });
+    }
+    updateModeButtons();
+
     addListener($('mode3d'), 'change', () => {
       document.body.classList.toggle('mode3d-on', $('mode3d').checked);
+      updateModeButtons();
       applyControlAvailability();
       if ($('mode3d').checked && lastRings && lastRings.length) {
         update3D(lastRings, readParams());

@@ -2,78 +2,123 @@ import { HDR_PRESETS, MATERIAL_PRESETS } from './rendering.mjs';
 import { ASPECT_OPTIONS, RESOLUTION_OPTIONS, VIDEO_FORMATS } from './capture.mjs';
 
 // Static markup only — every element is wired up by id in main.mjs.
+// Layout is a CapCut-style editor: top bar (mode switch + export), preview
+// stage center, properties panel right, keyframe timeline docked bottom.
 export function AppMarkup() {
   return (
     <>
-      <aside>
-        <div>
-          <h1>Bubble Text Generator</h1>
-          <div className="sub">Procedural inflate of any font</div>
+      <header className="topbar">
+        <div className="brand"><span className="brand-dot" aria-hidden="true" />Bubble Text</div>
+        <div className="mode-toggle" role="group" aria-label="View mode">
+          <input id="mode3d" type="checkbox" defaultChecked hidden />
+          <button type="button" className="mode-opt" data-mode-set="2d">2D</button>
+          <button type="button" className="mode-opt" data-mode-set="3d">3D</button>
         </div>
-
-        <div>
-          <label htmlFor="text">Text</label>
-          <input id="text" type="text" defaultValue="POPCAM" autoComplete="off" />
+        <span className="hint topbar-status" id="status">Loading default font…</span>
+        <div className="topbar-actions">
+          <button id="dlSvg" type="button" className="secondary">Download SVG</button>
+          <button id="dlPng" type="button">Export PNG</button>
         </div>
+      </header>
 
-        <div>
-          <label htmlFor="font">Font (.ttf / .otf)</label>
-          <input id="font" type="file" accept=".ttf,.otf,.woff" />
-          <div className="hint">Or pick a built-in heavy font below.</div>
+      <main>
+        <div id="stage">
+          <svg className="preview" id="preview" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+            <defs id="svgDefs"></defs>
+            <g id="viewGroup">
+              <path id="mainPath" />
+              <path id="outlinePath" fill="none" stroke="#fff" strokeLinejoin="round" strokeLinecap="round" />
+              <path id="hiPath" />
+            </g>
+          </svg>
+          <canvas id="three"></canvas>
+          <canvas id="record2d" hidden width="1920" height="1920"></canvas>
+          <button id="resetView2D" type="button" className="reset-view" aria-label="Reset 2D view">Reset view</button>
+          <div className="spinner" id="spin"></div>
         </div>
-
-        <div>
-          <label htmlFor="builtin">Built-in font</label>
-          <select id="builtin" defaultValue="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">Bagel Fat One (very puffy)</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/apache/luckiestguy/LuckiestGuy-Regular.ttf">Luckiest Guy</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/sniglet/Sniglet-Regular.ttf">Sniglet</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bungee/Bungee-Regular.ttf">Bungee</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bowlbyonesc/BowlbyOneSC-Regular.ttf">Bowlby One SC</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/passionone/PassionOne-Black.ttf">Passion One Black</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/changaone/ChangaOne-Regular.ttf">Changa One</option>
-            <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf">Orbitron</option>
-          </select>
-        </div>
-
-        <div>
-          <label htmlFor="svgFile">Or upload an SVG</label>
-          <input id="svgFile" type="file" accept=".svg,image/svg+xml" />
-          <div className="svg-row">
-            <span id="svgFileName" className="hint" />
-            <button id="svgClear" type="button" className="secondary svg-clear">Clear SVG</button>
+        <div id="captureBar" className="capture-bar" aria-label="Capture controls">
+          <div className="capture-pill">
+            <button type="button" className="cap-tab" data-capture-mode="image">Image</button>
+            <button type="button" className="cap-tab" data-capture-mode="video">Video</button>
+            <span className="cap-divider" />
+            {ASPECT_OPTIONS.map((opt) => (
+              <button key={opt.value} type="button" className="aspect-chip" data-aspect-id={opt.value}>{opt.label}</button>
+            ))}
           </div>
-          <div className="hint">Replaces the text input. Filled shapes (paths, rects, circles…) get inflated and rendered through the same 2D / 3D pipeline.</div>
+          <button id="shutter" type="button" className="shutter" aria-label="Take photo">
+            <span className="shutter-ring" />
+            <span className="shutter-dot" />
+          </button>
+          <div id="cycleChips" className="cycle-pill" hidden>
+            {[1, 2, 3].map((n) => (
+              <button key={n} type="button" className="cycle-chip" data-cycle={n} title={`Repeat ${n}× (rotation cycles in 3D, keyframe loops in 2D)`}>
+                <span aria-hidden="true">↻</span>{n}x
+              </button>
+            ))}
+          </div>
         </div>
+      </main>
 
-        <hr />
+      <aside>
+        <details className="sec" open>
+          <summary>Text &amp; source</summary>
+          <div className="sec-body">
+            <div>
+              <label htmlFor="text">Text</label>
+              <input id="text" type="text" defaultValue="POPCAM" autoComplete="off" />
+            </div>
+            <div>
+              <label htmlFor="builtin">Built-in font</label>
+              <select id="builtin" defaultValue="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bagelfatone/BagelFatOne-Regular.ttf">Bagel Fat One (very puffy)</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/apache/luckiestguy/LuckiestGuy-Regular.ttf">Luckiest Guy</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/sniglet/Sniglet-Regular.ttf">Sniglet</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bungee/Bungee-Regular.ttf">Bungee</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/bowlbyonesc/BowlbyOneSC-Regular.ttf">Bowlby One SC</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/passionone/PassionOne-Black.ttf">Passion One Black</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/changaone/ChangaOne-Regular.ttf">Changa One</option>
+                <option value="https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf">Orbitron</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="font">Custom font (.ttf / .otf)</label>
+              <input id="font" type="file" accept=".ttf,.otf,.woff" />
+            </div>
+            <div>
+              <label htmlFor="svgFile">Or upload an SVG</label>
+              <input id="svgFile" type="file" accept=".svg,image/svg+xml" />
+              <div className="svg-row">
+                <span id="svgFileName" className="hint" />
+                <button id="svgClear" type="button" className="secondary svg-clear">Clear SVG</button>
+              </div>
+              <div className="hint">Replaces the text input. Filled shapes get inflated through the same 2D / 3D pipeline.</div>
+            </div>
+          </div>
+        </details>
 
-        <div>
-          <div className="row"><label htmlFor="inflate">Inflate</label><button type="button" className="kf-diamond" data-kf-add="inflate" title="Add Inflate keyframe" aria-label="Add Inflate keyframe">◆</button><span className="val" id="inflateVal">14</span></div>
-          <input id="inflate" type="range" min="0" max="60" defaultValue="14" />
-        </div>
+        <details className="sec" open>
+          <summary>Bubble</summary>
+          <div className="sec-body">
+            <div>
+              <div className="row"><label htmlFor="inflate">Inflate</label><button type="button" className="kf-diamond" data-kf-add="inflate" title="Add Inflate keyframe" aria-label="Add Inflate keyframe">◆</button><span className="val" id="inflateVal">14</span></div>
+              <input id="inflate" type="range" min="0" max="60" defaultValue="14" />
+            </div>
+            <div>
+              <div className="row"><label htmlFor="blur">Bubble blend</label><button type="button" className="kf-diamond" data-kf-add="blur" title="Add Bubble blend keyframe" aria-label="Add Bubble blend keyframe">◆</button><span className="val" id="blurVal">3</span></div>
+              <input id="blur" type="range" min="0" max="20" defaultValue="3" />
+              <div className="hint">Higher = letters merge into a softer single blob.</div>
+            </div>
+            <div>
+              <div className="row"><label htmlFor="spacing">Letter spacing</label><button type="button" className="kf-diamond" data-kf-add="spacing" title="Add Letter spacing keyframe" aria-label="Add Letter spacing keyframe">◆</button><span className="val" id="spacingVal">-30</span></div>
+              <input id="spacing" type="range" min="-100" max="100" defaultValue="-30" />
+            </div>
+            <label className="checkbox"><input id="merge" type="checkbox" defaultChecked /> Soft-blend touching letters</label>
+          </div>
+        </details>
 
-        <div>
-          <div className="row"><label htmlFor="blur">Bubble blend</label><button type="button" className="kf-diamond" data-kf-add="blur" title="Add Bubble blend keyframe" aria-label="Add Bubble blend keyframe">◆</button><span className="val" id="blurVal">3</span></div>
-          <input id="blur" type="range" min="0" max="20" defaultValue="3" />
-          <div className="hint">Higher = letters merge into a softer single blob.</div>
-        </div>
-
-        <div>
-          <div className="row"><label htmlFor="spacing">Letter spacing</label><button type="button" className="kf-diamond" data-kf-add="spacing" title="Add Letter spacing keyframe" aria-label="Add Letter spacing keyframe">◆</button><span className="val" id="spacingVal">-30</span></div>
-          <input id="spacing" type="range" min="-100" max="100" defaultValue="-30" />
-        </div>
-
-        <div>
-          <label className="checkbox"><input id="merge" type="checkbox" defaultChecked /> Soft-blend touching letters</label>
-        </div>
-
-        <hr />
-
-        <details open>
+        <details className="sec" open>
           <summary>3D balloon</summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-            <label className="checkbox"><input id="mode3d" type="checkbox" defaultChecked /> 3D mode (drag to rotate, scroll to zoom)</label>
+          <div className="sec-body">
             <div>
               <div className="row"><label htmlFor="thickness">Thickness</label><span className="val" id="thicknessVal">0.55</span></div>
               <input id="thickness" type="range" min="0.1" max="1.5" step="0.05" defaultValue="0.55" />
@@ -81,15 +126,12 @@ export function AppMarkup() {
             <div>
               <div className="row"><label htmlFor="meshDensity">Mesh density</label><span className="val" id="meshDensityVal">14</span></div>
               <input id="meshDensity" type="range" min="6" max="28" step="1" defaultValue="14" />
-              <div className="hint">Smaller triangles = smoother surface, slower.</div>
             </div>
             <div>
               <div className="row"><label htmlFor="glossy">Gloss</label><span className="val" id="glossyVal">0.85</span></div>
               <input id="glossy" type="range" min="0" max="1" step="0.05" defaultValue="0.85" />
             </div>
-            <div>
-              <label className="checkbox"><input id="autoRotate" type="checkbox" /> Auto rotate</label>
-            </div>
+            <label className="checkbox"><input id="autoRotate" type="checkbox" /> Auto rotate</label>
             <div>
               <div className="row"><label htmlFor="rotateSpeed">Rotation speed</label><span className="val" id="rotateSpeedVal">0.8</span></div>
               <input id="rotateSpeed" type="range" min="0.1" max="3" step="0.1" defaultValue="0.8" />
@@ -111,7 +153,6 @@ export function AppMarkup() {
                   </button>
                 ))}
               </div>
-              <div className="hint">Mirror + Chrome reflect the HDR environment below.</div>
             </div>
             <div>
               <label>Environment (HDR)</label>
@@ -137,11 +178,11 @@ export function AppMarkup() {
           </div>
         </details>
 
-        <details>
-          <summary>Style</summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-            <div>
-              <label htmlFor="fill">Fill</label>
+        <details className="sec">
+          <summary>2D style</summary>
+          <div className="sec-body">
+            <div className="row">
+              <label htmlFor="fill">Fill color</label>
               <input id="fill" type="color" defaultValue="#ff2d55" />
             </div>
             <label className="checkbox"><input id="threeD" type="checkbox" defaultChecked /> 2D shading (highlight + shadow)</label>
@@ -153,9 +194,9 @@ export function AppMarkup() {
           </div>
         </details>
 
-        <details>
+        <details className="sec">
           <summary>Quality</summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+          <div className="sec-body">
             <div>
               <div className="row"><label htmlFor="quality">Resolution</label><span className="val" id="qualityVal">1.5</span></div>
               <input id="quality" type="range" min="0.5" max="3" step="0.1" defaultValue="1.5" />
@@ -163,68 +204,20 @@ export function AppMarkup() {
             <label className="checkbox"><input id="liveDrag" type="checkbox" defaultChecked /> Lower quality while dragging</label>
           </div>
         </details>
-
-        <div className="btn-row">
-          <button id="dlSvg">Download SVG</button>
-          <button id="dlPng" className="secondary">Download PNG</button>
-        </div>
-        <div className="hint" id="status">Loading default font…</div>
       </aside>
-      <main>
-        <div id="stage">
-          <svg className="preview" id="preview" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-            <defs id="svgDefs"></defs>
-            <g id="viewGroup">
-              <path id="mainPath" />
-              <path id="outlinePath" fill="none" stroke="#fff" strokeLinejoin="round" strokeLinecap="round" />
-              <path id="hiPath" />
-            </g>
-          </svg>
-          <canvas id="three"></canvas>
-          <canvas id="record2d" hidden width="1920" height="1920"></canvas>
-          <button id="resetView2D" type="button" className="reset-view" aria-label="Reset 2D view">Reset view</button>
-          <div className="spinner" id="spin"></div>
+
+      <section id="kfPanel" className="kf-panel" aria-label="Animation keyframes">
+        <div className="kf-panel-head">
+          <button id="kfPlay" type="button" className="secondary kf-btn">▶ Preview</button>
+          <button id="kfAdd" type="button" className="kf-btn">+ Keyframe</button>
+          <div id="kfTrackChips" className="kf-track-chips" role="tablist" aria-label="Animated parameter" />
+          <span className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</span>
+          <span className="kf-spacer" />
+          <button id="kfDelete" type="button" className="secondary kf-btn" hidden>Delete keyframe</button>
+          <button id="kfClear" type="button" className="secondary kf-btn">Clear track</button>
         </div>
-        <div id="captureBar" className="capture-bar" aria-label="Capture controls">
-          <div id="cycleChips" className="cycle-pill" hidden>
-            {[1, 2, 3].map((n) => (
-              <button key={n} type="button" className="cycle-chip" data-cycle={n} title={`Repeat ${n}× (rotation cycles in 3D, keyframe loops in 2D)`}>
-                <span aria-hidden="true">↻</span>{n}x
-              </button>
-            ))}
-          </div>
-          <button id="shutter" type="button" className="shutter" aria-label="Take photo">
-            <span className="shutter-ring" />
-            <span className="shutter-dot" />
-          </button>
-          <div className="capture-pill">
-            <button type="button" className="cap-tab" data-capture-mode="image">Image</button>
-            <button type="button" className="cap-tab" data-capture-mode="video">Video</button>
-            <span className="cap-divider" />
-            {ASPECT_OPTIONS.map((opt) => (
-              <button key={opt.value} type="button" className="aspect-chip" data-aspect-id={opt.value}>{opt.label}</button>
-            ))}
-          </div>
-          <div className="capture-hint">Photo + video work in both 2D and 3D modes.</div>
-        </div>
-        <section id="kfPanel" className="kf-panel" aria-label="Animation keyframes">
-          <div className="kf-panel-head">
-            <strong>Animation keyframes (2D record)</strong>
-            <div id="kfTrackChips" className="kf-track-chips" role="tablist" aria-label="Animated parameter" />
-            <span className="hint" id="keyframeStats">No keyframes — record will capture a 2-second static clip.</span>
-          </div>
-          <div className="kf-panel-body">
-            <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
-            <div className="kf-panel-actions">
-              <button id="kfAdd" type="button">+ Add at current</button>
-              <button id="kfPlay" type="button" className="secondary">▶ Preview</button>
-              <button id="kfClear" type="button" className="secondary">Clear track</button>
-              <button id="kfDelete" type="button" className="secondary" hidden>Delete keyframe</button>
-              <span className="hint kf-panel-hint">Pick a track above · click to add · drag to move · X = time</span>
-            </div>
-          </div>
-        </section>
-      </main>
+        <svg id="kfTimeline" className="kf-timeline" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" />
+      </section>
 
       <div id="recIndicator" className="rec-indicator" aria-live="polite">
         <span className="rec-dot" />
