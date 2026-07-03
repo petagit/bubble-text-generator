@@ -286,12 +286,13 @@ export function initApp() {
     let lastVideoUrl = null;
 
     // Solid backdrop used when "Include background" is on. Matches the top
-    // color of the canvas CSS gradient so the export looks WYSIWYG. The app
-    // theme is dark-only, so there is a single backdrop color.
-    const CAPTURE_BG_CSS = '#1f2228';
-    const captureBgColor = new THREE.Color(CAPTURE_BG_CSS);
+    // color of the canvas CSS gradient (per app theme) so exports look
+    // WYSIWYG regardless of the OS color scheme.
+    function captureBgCss() {
+      return document.body.classList.contains('light') ? '#eef1f6' : '#1f2228';
+    }
     function currentCaptureBackgroundColor() {
-      return captureBgColor;
+      return new THREE.Color(captureBgCss());
     }
 
     function setCaptureMode(mode) {
@@ -310,8 +311,29 @@ export function initApp() {
       for (const btn of document.querySelectorAll('[data-aspect-id]')) {
         btn.classList.toggle('selected', btn.dataset.aspectId === id);
       }
+      updateCropFrame();
       // Live-refresh the photo preview so users see the new framing immediately.
       if ($('imageModal').classList.contains('open')) refreshImagePreview(720);
+    }
+
+    // Viewfinder: draw the largest rect of the chosen aspect inscribed in the
+    // stage so users see what the camera will frame before capturing. The 3D
+    // capture path center-crops the live view to this exact frame.
+    function updateCropFrame() {
+      const frame = $('cropFrame');
+      if (!frame) return;
+      const aspect = aspectRatioForOption(captureAspectId);
+      if (!aspect) { frame.hidden = true; return; }
+      const stage = $('stage');
+      const pad = 14;
+      const maxW = Math.max(1, stage.clientWidth - pad * 2);
+      const maxH = Math.max(1, stage.clientHeight - pad * 2);
+      let w = maxW;
+      let h = w / aspect;
+      if (h > maxH) { h = maxH; w = h * aspect; }
+      frame.style.width = `${Math.round(w)}px`;
+      frame.style.height = `${Math.round(h)}px`;
+      frame.hidden = false;
     }
 
     function setCaptureCycles(n) {
@@ -336,7 +358,7 @@ export function initApp() {
       const cv = document.createElement('canvas');
       cv.width = W;
       cv.height = H;
-      const bg = captureWithBackground ? CAPTURE_BG_CSS : null;
+      const bg = captureWithBackground ? captureBgCss() : null;
       renderToCanvas(cv, lastGeom, readParams(), view2D, vb, { background: bg });
       return { dataUrl: cv.toDataURL('image/png'), width: W, height: H };
     }
@@ -657,9 +679,9 @@ export function initApp() {
     // by time on mutation. An empty track contributes nothing — the slider's
     // current value wins via the `base` overlay in interpolateTracks.
     const KF_TRACK_DEFS = [
-      { id: 'inflate', label: 'Inflate',        color: '#0a84ff', max: 60,  valueOffset: 0,    format: (v) => v.toFixed(0) },
-      { id: 'blur',    label: 'Bubble blend',   color: '#ff9f0a', max: 20,  valueOffset: 0,    format: (v) => v.toFixed(0) },
-      { id: 'spacing', label: 'Letter spacing', color: '#bf5af2', max: 200, valueOffset: -100, format: (v) => (v - 100).toFixed(0) },
+      { id: 'inflate', label: 'Inflate',        color: '#5b7a9d', max: 60,  valueOffset: 0,    format: (v) => v.toFixed(0) },
+      { id: 'blur',    label: 'Bubble blend',   color: '#a8845b', max: 20,  valueOffset: 0,    format: (v) => v.toFixed(0) },
+      { id: 'spacing', label: 'Letter spacing', color: '#8d6fa8', max: 200, valueOffset: -100, format: (v) => (v - 100).toFixed(0) },
     ];
     const KF_TRACK_BY_ID = Object.fromEntries(KF_TRACK_DEFS.map((t) => [t.id, t]));
     let kfTracks = Object.fromEntries(KF_TRACK_DEFS.map((t) => [t.id, []]));
@@ -1531,7 +1553,7 @@ export function initApp() {
       recordCanvas.height = Math.max(2, Math.round(targetW / aspect));
 
       // Background color (mirrors the photo path's WYSIWYG behaviour).
-      const bgColor = captureWithBackground ? CAPTURE_BG_CSS : null;
+      const bgColor = captureWithBackground ? captureBgCss() : null;
 
       // Paint the first frame so MediaRecorder's first sample isn't blank.
       renderToCanvas(recordCanvas, frames[0], frames[0].params, view2D, frozenViewBox, { background: bgColor });
@@ -1814,9 +1836,27 @@ export function initApp() {
       cleanups.push(() => kfRO.disconnect());
     }
 
+    // Theme: monochrome dark by default; light via body.light, persisted and
+    // seeded from the OS preference on first visit.
+    const savedTheme = (() => { try { return localStorage.getItem('bubbleTheme'); } catch (_) { return null; } })();
+    const startLight = savedTheme
+      ? savedTheme === 'light'
+      : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+    document.body.classList.toggle('light', startLight);
+    if ($('themeToggle')) {
+      addListener($('themeToggle'), 'click', () => {
+        const light = document.body.classList.toggle('light');
+        try { localStorage.setItem('bubbleTheme', light ? 'light' : 'dark'); } catch (_) {}
+        needsRender = true;
+      });
+    }
+
     // Capture wiring
     setCaptureMode('image');
     setCaptureAspect('free');
+    const stageRO = new ResizeObserver(updateCropFrame);
+    stageRO.observe($('stage'));
+    cleanups.push(() => stageRO.disconnect());
     addListener($('shutter'), 'click', () => {
       if (captureMode === 'image') openImageModal();
       else if (recorderHandle) stopVideoRecording();

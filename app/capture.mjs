@@ -117,6 +117,7 @@ export function captureImage({
   const prevStyle = canvas.style.cssText;
   const prevBackground = scene.background;
   const prevAspect = camera.aspect;
+  const prevFov = camera.fov;
 
   const liveAspect = prevWidth > 0 && prevHeight > 0 ? prevWidth / prevHeight : 1;
   const renderAspect = aspectRatio && aspectRatio > 0 ? aspectRatio : liveAspect;
@@ -134,6 +135,15 @@ export function captureImage({
   renderer.setSize(w, h, false);
   if (typeof camera.updateProjectionMatrix === 'function') {
     camera.aspect = renderAspect;
+    // three.js keeps the vertical fov fixed, so a target frame wider than
+    // the live view would reveal extra scene to the sides. Narrow the
+    // vertical fov instead so the export is always a center-crop of the
+    // live framing — this keeps the on-stage viewfinder frame truthful.
+    if (typeof camera.fov === 'number' && renderAspect > liveAspect) {
+      const vFov = (camera.fov * Math.PI) / 180;
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * liveAspect);
+      camera.fov = (2 * Math.atan(Math.tan(hFov / 2) / renderAspect) * 180) / Math.PI;
+    }
     camera.updateProjectionMatrix();
   }
   renderer.render(scene, camera);
@@ -154,6 +164,7 @@ export function captureImage({
   renderer.setSize(prevWidth, prevHeight, false);
   if (typeof camera.updateProjectionMatrix === 'function') {
     camera.aspect = prevAspect;
+    if (typeof prevFov === 'number') camera.fov = prevFov;
     camera.updateProjectionMatrix();
   }
   canvas.style.cssText = prevStyle;

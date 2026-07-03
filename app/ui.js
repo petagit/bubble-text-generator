@@ -16,6 +16,7 @@ export function AppMarkup() {
         </div>
         <span className="hint topbar-status" id="status">Loading default font…</span>
         <div className="topbar-actions">
+          <button id="themeToggle" type="button" className="icon-btn" title="Toggle light / dark theme" aria-label="Toggle light or dark theme">◐</button>
           <button id="dlSvg" type="button" className="secondary">Download SVG</button>
           <button id="dlPng" type="button">Export PNG</button>
         </div>
@@ -34,6 +35,7 @@ export function AppMarkup() {
           <canvas id="three"></canvas>
           <canvas id="record2d" hidden width="1920" height="1920"></canvas>
           <button id="resetView2D" type="button" className="reset-view" aria-label="Reset 2D view">Reset view</button>
+          <div id="cropFrame" className="crop-frame" hidden aria-hidden="true"></div>
           <div className="spinner" id="spin"></div>
         </div>
         <div id="captureBar" className="capture-bar" aria-label="Capture controls">
